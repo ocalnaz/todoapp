@@ -49,6 +49,39 @@ $message = "";
 $error = "";
 
 
+/**
+ * Veritabanında UTC tutulan tarihi Türkiye saatine çevirir.
+ */
+function format_turkey_datetime($value): string
+{
+
+    $value = trim((string) $value);
+
+
+    if ($value === "") {
+        return "-";
+    }
+
+
+    try {
+
+        $utc_date = new DateTimeImmutable(
+            $value,
+            new DateTimeZone("UTC")
+        );
+
+        return $utc_date
+            ->setTimezone(new DateTimeZone("Europe/Istanbul"))
+            ->format("Y-m-d H:i:s");
+
+    } catch (Exception $e) {
+
+        return $value;
+
+    }
+}
+
+
 // ==================================================
 // POST İŞLEMLERİ
 // ==================================================
@@ -776,7 +809,11 @@ unset($submission);
                         </strong>
 
                         <?= htmlspecialchars(
-                            $submission["created_at"]
+                            format_turkey_datetime(
+                                $submission["created_at"]
+                            ),
+                            ENT_QUOTES,
+                            "UTF-8"
                         ) ?>
 
                     </div>

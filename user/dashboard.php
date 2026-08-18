@@ -46,6 +46,48 @@ $message = "";
 $error = "";
 
 
+$turkey_timezone = new DateTimeZone("Europe/Istanbul");
+$utc_timezone = new DateTimeZone("UTC");
+$turkey_now = new DateTimeImmutable("now", $turkey_timezone);
+$utc_now = $turkey_now
+    ->setTimezone($utc_timezone)
+    ->format("Y-m-d H:i:s");
+$today_turkey = $turkey_now->format("Y-m-d");
+
+
+/**
+ * Veritabanında UTC tutulan tarihi Türkiye saatine çevirir.
+ */
+function format_turkey_datetime($value): string
+{
+
+    $value = trim((string) $value);
+
+
+    if ($value === "") {
+        return "-";
+    }
+
+
+    try {
+
+        $utc_date = new DateTimeImmutable(
+            $value,
+            new DateTimeZone("UTC")
+        );
+
+        return $utc_date
+            ->setTimezone(new DateTimeZone("Europe/Istanbul"))
+            ->format("Y-m-d H:i:s");
+
+    } catch (Exception $e) {
+
+        return $value;
+
+    }
+}
+
+
 // ============================================================
 // CSRF TOKEN
 // ============================================================
@@ -476,14 +518,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     // BUGÜN DAHA ÖNCE GÖNDERİLMİŞ Mİ?
                     // ====================================================
 
-                    $today_start =
-                        date("Y-m-d 00:00:00");
+                    $today_start = $turkey_now
+                        ->setTime(0, 0, 0)
+                        ->setTimezone($utc_timezone)
+                        ->format("Y-m-d H:i:s");
 
-                    $tomorrow_start =
-                        date(
-                            "Y-m-d 00:00:00",
-                            strtotime("+1 day")
-                        );
+                    $tomorrow_start = $turkey_now
+                        ->modify("+1 day")
+                        ->setTime(0, 0, 0)
+                        ->setTimezone($utc_timezone)
+                        ->format("Y-m-d H:i:s");
 
 
                     $daily_check =
@@ -695,8 +739,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                 ?,
                                 ?,
                                 ?,
-                                CURRENT_TIMESTAMP,
-                                CURRENT_TIMESTAMP,
+                                ?,
+                                ?,
                                 ?,
                                 ?,
                                 ?
@@ -709,6 +753,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         $task_id,
                         $user_id,
                         $content,
+                        $utc_now,
+                        $utc_now,
                         "incelemede",
                         $submission_file_name,
                         $submission_file_path
@@ -774,7 +820,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                         ?,
                                         ?,
                                         ?,
-                                        CURRENT_TIMESTAMP
+                                        ?
                                     )
                                 ");
 
@@ -782,9 +828,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             $daily_task_insert->execute([
 
                                 $task_id,
-                                date("Y-m-d"),
+                                $today_turkey,
                                 $assigned_task["title"],
-                                "incelemede"
+                                "incelemede",
+                                $utc_now
 
                             ]);
 
@@ -1500,12 +1547,13 @@ foreach ($task_submissions as $task_id => $submissions) {
     foreach ($submissions as $submission) {
 
         if (
-            date(
-                "Y-m-d",
-                strtotime(
+            substr(
+                format_turkey_datetime(
                     $submission["submitted_at"]
-                )
-            ) === date("Y-m-d")
+                ),
+                0,
+                10
+            ) === $today_turkey
         ) {
 
             $submitted_today[(int) $task_id] = true;
@@ -2416,7 +2464,9 @@ foreach ($task_submissions as $task_id => $submissions) {
                                             <span class="submission-date">
 
                                                 <?= htmlspecialchars(
-                                                    $submission["submitted_at"],
+                                                    format_turkey_datetime(
+                                                        $submission["submitted_at"]
+                                                    ),
                                                     ENT_QUOTES,
                                                     "UTF-8"
                                                 ) ?>

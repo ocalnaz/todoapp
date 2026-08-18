@@ -37,6 +37,37 @@ function normalizeActivityUploadPath($filePath)
     return $relativePath;
 }
 
+
+function format_turkey_datetime($value): string
+{
+
+    $value = trim((string) $value);
+
+
+    if ($value === "") {
+        return "-";
+    }
+
+
+    try {
+
+        $utcDate = new DateTimeImmutable(
+            $value,
+            new DateTimeZone("UTC")
+        );
+
+        return $utcDate
+            ->setTimezone(new DateTimeZone("Europe/Istanbul"))
+            ->format("Y-m-d H:i:s");
+
+    } catch (Exception $e) {
+
+        return $value;
+
+    }
+}
+
+
 $activityId = filter_input(
     INPUT_GET,
     "id",
@@ -105,6 +136,14 @@ if (!$activity) {
         <div class="container file-viewer-container">
         <div class="file-viewer-toolbar">
             <a class="file-viewer-button file-viewer-back-link" href="calismalar.php">← Çalışmalara Dön</a>
+            <button
+                type="button"
+                id="themeToggle"
+                class="file-viewer-button"
+                aria-label="Temayı değiştir"
+            >
+                🌙
+            </button>
         </div>
 
         <section class="box file-viewer-card">
@@ -126,7 +165,13 @@ if (!$activity) {
                     </div>
                     <div class="file-viewer-metadata-item">
                         <span class="file-viewer-metadata-label">Gönderim Tarihi</span>
-                        <strong><?= htmlspecialchars($activity["created_at"], ENT_QUOTES, "UTF-8") ?></strong>
+                        <strong><?= htmlspecialchars(
+                            format_turkey_datetime(
+                                $activity["created_at"]
+                            ),
+                            ENT_QUOTES,
+                            "UTF-8"
+                        ) ?></strong>
                     </div>
                 </div>
 
@@ -185,5 +230,22 @@ if (!$activity) {
         </section>
         </div>
     </main>
+
+    <script>
+        const themeToggle = document.getElementById("themeToggle");
+
+        if (localStorage.getItem("theme") === "dark") {
+            document.body.classList.add("dark-mode");
+            themeToggle.textContent = "☀️";
+        }
+
+        themeToggle.addEventListener("click", function () {
+            document.body.classList.toggle("dark-mode");
+
+            const isDarkMode = document.body.classList.contains("dark-mode");
+            themeToggle.textContent = isDarkMode ? "☀️" : "🌙";
+            localStorage.setItem("theme", isDarkMode ? "dark" : "light");
+        });
+    </script>
 </body>
 </html>

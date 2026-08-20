@@ -325,7 +325,7 @@ $tasks =
 
     <link
         rel="stylesheet"
-        href="../css/style.css"
+        href="../assets/css/style.css"
     >
 
 </head>

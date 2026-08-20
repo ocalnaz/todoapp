@@ -129,7 +129,7 @@ if (!$activity) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($pageTitle ?? "Dosya Görüntüleme", ENT_QUOTES, "UTF-8") ?></title>
-    <link rel="stylesheet" href="../css/style.css?v=dosya-goruntule-v2">
+    <link rel="stylesheet" href="../assets/css/style.css?v=dosya-goruntule-v2">
 </head>
 <body class="file-viewer-page">
     <main class="main file-viewer-main">

@@ -6,6 +6,41 @@ require_once "../config/database.php";
 
 
 // ============================================================
+// SQLITE ÇOKLU DOSYA TABLOSU
+// ============================================================
+
+try {
+
+    $db->exec("PRAGMA foreign_keys = ON");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS task_submission_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_id INTEGER NOT NULL,
+            original_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (submission_id)
+                REFERENCES task_submissions (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        )
+    ");
+
+    $db->exec("
+        CREATE INDEX IF NOT EXISTS
+        idx_task_submission_files_submission_id
+        ON task_submission_files (submission_id)
+    ");
+
+} catch (PDOException $e) {
+
+    // Kurulum SQL'i ayrıca çalıştırılmışsa bu blok zaten sorunsuz geçer.
+
+}
+
+
+// ============================================================
 // GİRİŞ KONTROLÜ
 // ============================================================
 
@@ -41,6 +76,40 @@ $user_id =
 
 $user_name =
     $_SESSION["full_name"] ?? "Kullanıcı";
+
+$profile_image = "";
+$profile_image_url = "";
+$profile_stmt = $db->prepare("
+    SELECT profile_image
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+");
+$profile_stmt->execute([$user_id]);
+$profile_image = (string) ($profile_stmt->fetchColumn() ?: "");
+
+if ($profile_image !== "") {
+    $profile_root = realpath(__DIR__ . "/../uploads/profile_images");
+    $profile_candidate = realpath(
+        __DIR__ . "/../" . str_replace("/", DIRECTORY_SEPARATOR, $profile_image)
+    );
+
+    if (
+        $profile_root !== false &&
+        $profile_candidate !== false &&
+        (
+            $profile_candidate === $profile_root ||
+            strncmp(
+                $profile_candidate,
+                $profile_root . DIRECTORY_SEPARATOR,
+                strlen($profile_root . DIRECTORY_SEPARATOR)
+            ) === 0
+        ) &&
+        is_file($profile_candidate)
+    ) {
+        $profile_image_url = "../" . ltrim($profile_image, "/\\");
+    }
+}
 
 $message = "";
 $error = "";
@@ -88,6 +157,92 @@ function format_turkey_datetime($value): string
 }
 
 
+function validate_uploaded_file_type(array $file): string
+{
+
+    $allowedExtensions = [
+        "pdf",
+        "doc",
+        "docx",
+        "jpg",
+        "jpeg",
+        "png",
+        "xls",
+        "xlsx"
+    ];
+
+    $allowedMimeTypes = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image/jpeg",
+        "image/png",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ];
+
+    $mimeTypesByExtension = [
+        "pdf" => ["application/pdf"],
+        "doc" => ["application/msword"],
+        "docx" => [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ],
+        "jpg" => ["image/jpeg"],
+        "jpeg" => ["image/jpeg"],
+        "png" => ["image/png"],
+        "xls" => ["application/vnd.ms-excel"],
+        "xlsx" => [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ]
+    ];
+
+    $errorMessage =
+        "Yüklenen dosya şu dosya türlerinden biri olmalıdır: "
+        . implode(", ", $allowedExtensions)
+        . PHP_EOL
+        . "Yüklenen dosya şu dosya türlerinden biri olmalıdır: "
+        . implode(", ", $allowedMimeTypes)
+        . ".";
+
+    $originalName = (string) ($file["name"] ?? "");
+    $extension = strtolower(
+        pathinfo($originalName, PATHINFO_EXTENSION)
+    );
+    $temporaryPath = (string) ($file["tmp_name"] ?? "");
+
+    if (
+        $extension === "" ||
+        !isset($mimeTypesByExtension[$extension]) ||
+        $temporaryPath === "" ||
+        !is_uploaded_file($temporaryPath)
+    ) {
+        throw new Exception($errorMessage);
+    }
+
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+
+    if ($finfo === false) {
+        throw new Exception($errorMessage);
+    }
+
+    $detectedMimeType = finfo_file($finfo, $temporaryPath);
+    finfo_close($finfo);
+
+    if (
+        $detectedMimeType === false ||
+        !in_array(
+            $detectedMimeType,
+            $mimeTypesByExtension[$extension],
+            true
+        )
+    ) {
+        throw new Exception($errorMessage);
+    }
+
+    return $extension;
+}
+
+
 // ============================================================
 // CSRF TOKEN
 // ============================================================
@@ -101,6 +256,8 @@ if (empty($_SESSION["csrf_token"])) {
 
 $csrf_token =
     $_SESSION["csrf_token"];
+
+$active_section = "dashboard";
 
 
 // ============================================================
@@ -127,6 +284,148 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     } else {
 
+
+        // ====================================================
+        // PROFİL FOTOĞRAFI GÜNCELLE
+        // ====================================================
+
+        if (isset($_POST["update_profile_image"])) {
+
+            try {
+                if (
+                    !isset($_FILES["profile_image"]) ||
+                    $_FILES["profile_image"]["error"] !== UPLOAD_ERR_OK
+                ) {
+                    throw new Exception("Lütfen geçerli bir profil fotoğrafı seçin.");
+                }
+
+                $profile_file = $_FILES["profile_image"];
+                $profile_extension = strtolower(
+                    pathinfo($profile_file["name"] ?? "", PATHINFO_EXTENSION)
+                );
+                $profile_mimes = [
+                    "jpg" => "image/jpeg",
+                    "jpeg" => "image/jpeg",
+                    "png" => "image/png"
+                ];
+
+                if (
+                    !isset($profile_mimes[$profile_extension]) ||
+                    (int) ($profile_file["size"] ?? 0) > 5 * 1024 * 1024 ||
+                    !is_uploaded_file($profile_file["tmp_name"] ?? "")
+                ) {
+                    throw new Exception(
+                        "Profil fotoğrafı JPG, JPEG veya PNG olmalı ve en fazla 5 MB olabilir."
+                    );
+                }
+
+                $profile_finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $profile_mime = $profile_finfo
+                    ? finfo_file($profile_finfo, $profile_file["tmp_name"])
+                    : false;
+                if ($profile_finfo) {
+                    finfo_close($profile_finfo);
+                }
+
+                if ($profile_mime !== $profile_mimes[$profile_extension]) {
+                    throw new Exception(
+                        "Profil fotoğrafının gerçek dosya türü JPG, JPEG veya PNG olmalıdır."
+                    );
+                }
+
+                $profile_upload_dir = "../uploads/profile_images/";
+                if (!is_dir($profile_upload_dir) && !mkdir($profile_upload_dir, 0775, true)) {
+                    throw new Exception("Profil fotoğrafı klasörü oluşturulamadı.");
+                }
+
+                $old_profile_stmt = $db->prepare(
+                    "SELECT profile_image FROM users WHERE id = ? LIMIT 1"
+                );
+                $old_profile_stmt->execute([$user_id]);
+                $old_profile_image = (string) ($old_profile_stmt->fetchColumn() ?: "");
+
+                $profile_filename =
+                    "profile_" . $user_id . "_" . bin2hex(random_bytes(8)) . "." . $profile_extension;
+                $profile_target = $profile_upload_dir . $profile_filename;
+
+                if (!move_uploaded_file($profile_file["tmp_name"], $profile_target)) {
+                    throw new Exception("Profil fotoğrafı sunucuya yüklenemedi.");
+                }
+
+                $profile_path = "uploads/profile_images/" . $profile_filename;
+                $profile_update_stmt = $db->prepare(
+                    "UPDATE users SET profile_image = ? WHERE id = ?"
+                );
+                $profile_update_stmt->execute([$profile_path, $user_id]);
+                $profile_image = $profile_path;
+                $profile_image_url = "../" . $profile_path;
+
+                if ($old_profile_image !== "") {
+                    $old_profile_file = realpath(
+                        __DIR__ . "/../" . str_replace("/", DIRECTORY_SEPARATOR, $old_profile_image)
+                    );
+                    $profile_root = realpath(__DIR__ . "/../uploads/profile_images");
+                    if (
+                        $old_profile_file !== false &&
+                        $profile_root !== false &&
+                        strncmp(
+                            $old_profile_file,
+                            $profile_root . DIRECTORY_SEPARATOR,
+                            strlen($profile_root . DIRECTORY_SEPARATOR)
+                        ) === 0 &&
+                        is_file($old_profile_file)
+                    ) {
+                        @unlink($old_profile_file);
+                    }
+                }
+
+                $message = "Profil fotoğrafınız başarıyla güncellendi.";
+            } catch (Exception $e) {
+                $error = $e->getMessage();
+            }
+        }
+
+        // ====================================================
+        // PROFİL FOTOĞRAFI SİL
+        // ====================================================
+
+        if (isset($_POST["delete_profile_image"])) {
+
+            try {
+                $delete_profile_stmt = $db->prepare(
+                    "SELECT profile_image FROM users WHERE id = ? LIMIT 1"
+                );
+                $delete_profile_stmt->execute([$user_id]);
+                $delete_profile_image = (string) ($delete_profile_stmt->fetchColumn() ?: "");
+
+                $delete_profile_file = realpath(
+                    __DIR__ . "/../" . str_replace("/", DIRECTORY_SEPARATOR, $delete_profile_image)
+                );
+                $profile_root = realpath(__DIR__ . "/../uploads/profile_images");
+                if (
+                    $delete_profile_file !== false &&
+                    $profile_root !== false &&
+                    strncmp(
+                        $delete_profile_file,
+                        $profile_root . DIRECTORY_SEPARATOR,
+                        strlen($profile_root . DIRECTORY_SEPARATOR)
+                    ) === 0 &&
+                    is_file($delete_profile_file)
+                ) {
+                    @unlink($delete_profile_file);
+                }
+
+                $delete_profile_update = $db->prepare(
+                    "UPDATE users SET profile_image = NULL WHERE id = ?"
+                );
+                $delete_profile_update->execute([$user_id]);
+                $profile_image = "";
+                $profile_image_url = "";
+                $message = "Profil fotoğrafınız silindi.";
+            } catch (Exception $e) {
+                $error = "Profil fotoğrafı silinirken bir hata oluştu.";
+            }
+        }
 
         // ====================================================
         // 1. KULLANICI ÇALIŞMASI EKLE
@@ -202,54 +501,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
 
                         $extension =
-                            strtolower(
-                                pathinfo(
-                                    $original_name,
-                                    PATHINFO_EXTENSION
-                                )
+                            validate_uploaded_file_type(
+                                $_FILES["activity_file"]
                             );
-
-
-                        $allowed_extensions = [
-
-                            "jpg",
-                            "jpeg",
-                            "png",
-                            "gif",
-                            "webp",
-
-                            "pdf",
-
-                            "doc",
-                            "docx",
-
-                            "xls",
-                            "xlsx",
-
-                            "ppt",
-                            "pptx",
-
-                            "txt",
-
-                            "zip",
-                            "rar"
-
-                        ];
-
-
-                        if (
-                            !in_array(
-                                $extension,
-                                $allowed_extensions,
-                                true
-                            )
-                        ) {
-
-                            throw new Exception(
-                                "Bu dosya türüne izin verilmiyor."
-                            );
-
-                        }
 
 
                         $upload_dir =
@@ -505,15 +759,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     }
 
 
-                    if ($assigned_task["status"] === "onaylandı") {
-
-                        throw new Exception(
-                            "Onaylanmış bir göreve yeni gönderim yapılamaz."
-                        );
-
-                    }
-
-
                     // ====================================================
                     // BUGÜN DAHA ÖNCE GÖNDERİLMİŞ Mİ?
                     // ====================================================
@@ -567,94 +812,61 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     $submission_file_name = null;
                     $submission_file_path = null;
+                    $uploaded_submission_files = [];
+                    $submission_files_to_upload = [];
+                    $max_file_size = 10 * 1024 * 1024;
+                    $max_file_count = 10;
 
 
                     if (
-                        isset($_FILES["submission_file"]) &&
-                        $_FILES["submission_file"]["error"] !== UPLOAD_ERR_NO_FILE
+                        isset($_FILES["submission_files"])
+                        && is_array(
+                            $_FILES["submission_files"]["name"] ?? null
+                        )
                     ) {
 
+                        $submission_file_count = count(
+                            $_FILES["submission_files"]["name"]
+                        );
 
-                        if (
-                            $_FILES["submission_file"]["error"] !== UPLOAD_ERR_OK
-                        ) {
+                        if ($submission_file_count > $max_file_count) {
 
                             throw new Exception(
-                                "Gönderim dosyası yüklenirken hata oluştu."
+                                "Bir gönderimde en fazla "
+                                . $max_file_count
+                                . " dosya seçebilirsiniz."
                             );
 
                         }
 
-
-                        $max_size =
-                            10 * 1024 * 1024;
-
-
-                        if (
-                            $_FILES["submission_file"]["size"] > $max_size
+                        for (
+                            $file_index = 0;
+                            $file_index < $submission_file_count;
+                            $file_index++
                         ) {
 
-                            throw new Exception(
-                                "Dosya boyutu en fazla 10 MB olabilir."
-                            );
+                            $submission_files_to_upload[] = [
+                                "name" => $_FILES["submission_files"]["name"][$file_index] ?? "",
+                                "type" => $_FILES["submission_files"]["type"][$file_index] ?? "",
+                                "tmp_name" => $_FILES["submission_files"]["tmp_name"][$file_index] ?? "",
+                                "error" => $_FILES["submission_files"]["error"][$file_index] ?? UPLOAD_ERR_NO_FILE,
+                                "size" => $_FILES["submission_files"]["size"][$file_index] ?? 0
+                            ];
 
                         }
 
+                    } elseif (
+                        isset($_FILES["submission_file"])
+                        && $_FILES["submission_file"]["error"] !== UPLOAD_ERR_NO_FILE
+                    ) {
 
-                        $original_name =
-                            $_FILES["submission_file"]["name"];
+                        // Eski tek dosyalı form gönderimleri için geriye dönük uyumluluk.
+                        $submission_files_to_upload[] = $_FILES["submission_file"];
 
-
-                        $extension =
-                            strtolower(
-                                pathinfo(
-                                    $original_name,
-                                    PATHINFO_EXTENSION
-                                )
-                            );
+                    }
 
 
-                        $allowed_extensions = [
-
-                            "jpg",
-                            "jpeg",
-                            "png",
-                            "gif",
-                            "webp",
-
-                            "pdf",
-
-                            "doc",
-                            "docx",
-
-                            "xls",
-                            "xlsx",
-
-                            "ppt",
-                            "pptx",
-
-                            "txt",
-
-                            "zip",
-                            "rar"
-
-                        ];
-
-
-                        if (
-                            !in_array(
-                                $extension,
-                                $allowed_extensions,
-                                true
-                            )
-                        ) {
-
-                            throw new Exception(
-                                "Bu dosya türüne izin verilmiyor."
-                            );
-
-                        }
-
+                    if (!empty($submission_files_to_upload)) {
 
                         $upload_dir =
                             "../uploads/task_submissions/";
@@ -679,40 +891,95 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         }
 
 
-                        $safe_name =
-                            bin2hex(
-                                random_bytes(16)
-                            )
-                            . "_"
-                            . time()
-                            . "."
-                            . $extension;
-
-
-                        $target_file =
-                            $upload_dir . $safe_name;
-
-
-                        if (
-                            !move_uploaded_file(
-                                $_FILES["submission_file"]["tmp_name"],
-                                $target_file
-                            )
+                        foreach (
+                            $submission_files_to_upload as $submission_file
                         ) {
 
-                            throw new Exception(
-                                "Gönderim dosyası sunucuya yüklenemedi."
+                            if (
+                                ($submission_file["error"] ?? UPLOAD_ERR_NO_FILE)
+                                === UPLOAD_ERR_NO_FILE
+                            ) {
+
+                                continue;
+
+                            }
+
+                            if (
+                                ($submission_file["error"] ?? UPLOAD_ERR_NO_FILE)
+                                !== UPLOAD_ERR_OK
+                            ) {
+
+                                throw new Exception(
+                                    "Gönderim dosyası yüklenirken hata oluştu."
+                                );
+
+                            }
+
+                            if (
+                                (int) ($submission_file["size"] ?? 0)
+                                > $max_file_size
+                            ) {
+
+                                throw new Exception(
+                                    "Her dosya en fazla 10 MB olabilir."
+                                );
+
+                            }
+
+                            $original_name = (string) (
+                                $submission_file["name"] ?? ""
                             );
+
+                            $extension =
+                                validate_uploaded_file_type(
+                                    $submission_file
+                                );
+
+                            $safe_name =
+                                bin2hex(random_bytes(16))
+                                . "_"
+                                . time()
+                                . "."
+                                . $extension;
+
+                            $target_file =
+                                $upload_dir . $safe_name;
+
+                            if (
+                                !move_uploaded_file(
+                                    $submission_file["tmp_name"],
+                                    $target_file
+                                )
+                            ) {
+
+                                throw new Exception(
+                                    "Gönderim dosyası sunucuya yüklenemedi."
+                                );
+
+                            }
+
+                            $stored_path =
+                                "uploads/task_submissions/"
+                                . $safe_name;
+
+                            $uploaded_submission_files[] = [
+                                "original_name" => $original_name,
+                                "file_path" => $stored_path,
+                                "absolute_path" => $target_file
+                            ];
 
                         }
 
+                        if (!empty($uploaded_submission_files)) {
 
-                        $submission_file_name =
-                            $original_name;
+                            // Eski kolonlar geriye dönük uyumluluk için ilk eki tutar.
+                            $submission_file_name =
+                                $uploaded_submission_files[0]["original_name"];
 
-                        $submission_file_path =
-                            "uploads/task_submissions/"
-                            . $safe_name;
+                            $submission_file_path =
+                                $uploaded_submission_files[0]["file_path"];
+
+                        }
 
                     }
 
@@ -761,21 +1028,41 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     ]);
 
+                    $submission_id =
+                        (int) $db->lastInsertId();
 
-                    // Gönderim alındığında görev de admin incelemesine alınır.
-                    $task_status_stmt = $db->prepare("
-                        UPDATE tasks
-                        SET status = ?
-                        WHERE id = ?
-                          AND assigned_to = ?
-                          AND status IN ('bekliyor', 'incelemede', 'revizyon')
-                    ");
+                    if (
+                        $submission_id > 0
+                        && !empty($uploaded_submission_files)
+                    ) {
 
-                    $task_status_stmt->execute([
-                        "incelemede",
-                        $task_id,
-                        $user_id
-                    ]);
+                        $submission_file_stmt =
+                            $db->prepare("
+                                INSERT INTO task_submission_files
+                                (
+                                    submission_id,
+                                    original_name,
+                                    file_path,
+                                    created_at
+                                )
+                                VALUES
+                                (?, ?, ?, ?)
+                            ");
+
+                        foreach (
+                            $uploaded_submission_files as $stored_file
+                        ) {
+
+                            $submission_file_stmt->execute([
+                                $submission_id,
+                                $stored_file["original_name"],
+                                $stored_file["file_path"],
+                                $utc_now
+                            ]);
+
+                        }
+
+                    }
 
 
                     // ====================================================
@@ -796,10 +1083,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                         $daily_task_check->execute([
 
-                            $task_id,
-                            date("Y-m-d")
+                                $task_id,
+                                $today_turkey
 
-                        ]);
+                            ]);
 
 
                         if (!$daily_task_check->fetch()) {
@@ -919,10 +1206,58 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                 } catch (Exception $e) {
 
+                    foreach (
+                        $uploaded_submission_files ?? [] as $stored_file
+                    ) {
+
+                        $relative_path = str_replace(
+                            "/",
+                            DIRECTORY_SEPARATOR,
+                            ltrim(
+                                $stored_file["file_path"] ?? "",
+                                "/\\"
+                            )
+                        );
+
+                        $absolute_path =
+                            dirname(__DIR__)
+                            . DIRECTORY_SEPARATOR
+                            . $relative_path;
+
+                        if (is_file($absolute_path)) {
+                            @unlink($absolute_path);
+                        }
+
+                    }
+
                     $error =
                         $e->getMessage();
 
                 } catch (PDOException $e) {
+
+                    foreach (
+                        $uploaded_submission_files ?? [] as $stored_file
+                    ) {
+
+                        $relative_path = str_replace(
+                            "/",
+                            DIRECTORY_SEPARATOR,
+                            ltrim(
+                                $stored_file["file_path"] ?? "",
+                                "/\\"
+                            )
+                        );
+
+                        $absolute_path =
+                            dirname(__DIR__)
+                            . DIRECTORY_SEPARATOR
+                            . $relative_path;
+
+                        if (is_file($absolute_path)) {
+                            @unlink($absolute_path);
+                        }
+
+                    }
 
                     $error =
                         "Günlük görev gönderilirken bir hata oluştu.";
@@ -935,34 +1270,89 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
 
         // ====================================================
-        // 3. BİLDİRİMLERİ OKUNDU YAP
+        // TEKİL BİLDİRİMİ OKUNDU / OKUNMADI YAP
         // ====================================================
 
-        if (isset($_POST["mark_notifications_read"])) {
+        if (isset($_POST["notification_action"])) {
 
-            try {
+            $active_section = "bildirimler";
 
-                $read_stmt =
-                    $db->prepare("
-                        UPDATE notifications
-                        SET is_read = 1
-                        WHERE user_id = ?
-                    ");
+            $notification_action =
+                (string) $_POST["notification_action"];
+
+            $notification_id = filter_var(
+                $_POST["notification_id"] ?? null,
+                FILTER_VALIDATE_INT,
+                [
+                    "options" => [
+                        "min_range" => 1
+                    ]
+                ]
+            );
+
+            $allowed_notification_actions = [
+                "mark_read",
+                "mark_unread"
+            ];
 
 
-                $read_stmt->execute([
-                    $user_id
-                ]);
-
-
-                $message =
-                    "Bildirimler okundu olarak işaretlendi.";
-
-
-            } catch (PDOException $e) {
+            if (
+                $notification_id === false
+                || !in_array(
+                    $notification_action,
+                    $allowed_notification_actions,
+                    true
+                )
+            ) {
 
                 $error =
-                    "Bildirimler güncellenirken hata oluştu.";
+                    "Geçersiz bildirim işlemi.";
+
+            } else {
+
+                try {
+
+                    $new_read_value =
+                        $notification_action === "mark_read"
+                        ? 1
+                        : 0;
+
+                    $notification_update =
+                        $db->prepare("
+                            UPDATE notifications
+                            SET is_read = ?
+                            WHERE id = ?
+                              AND user_id = ?
+                        ");
+
+
+                    $notification_update->execute([
+                        $new_read_value,
+                        $notification_id,
+                        $user_id
+                    ]);
+
+
+                    if ($notification_update->rowCount() > 0) {
+
+                        $message =
+                            $new_read_value === 1
+                            ? "Bildirim okundu olarak işaretlendi."
+                            : "Bildirim okunmadı olarak işaretlendi.";
+
+                    } else {
+
+                        $error =
+                            "Bildirim bulunamadı veya bu işlem için yetkiniz yok.";
+
+                    }
+
+                } catch (PDOException $e) {
+
+                    $error =
+                        "Bildirim güncellenirken hata oluştu.";
+
+                }
 
             }
 
@@ -982,24 +1372,28 @@ try {
     $stmt =
         $db->prepare("
             SELECT
-                id,
-                title,
-                description,
-                assigned_to,
-                assigned_by,
-                due_date,
-                status,
-                created_at
+                tasks.id,
+                tasks.title,
+                tasks.description,
+                tasks.assigned_to,
+                tasks.assigned_by,
+                tasks.due_date,
+                tasks.status,
+                tasks.created_at,
+                assigned_admin.full_name AS assigned_by_name,
+                assigned_admin.username AS assigned_by_username
             FROM tasks
-            WHERE assigned_to = ?
+            LEFT JOIN users assigned_admin
+                ON tasks.assigned_by = assigned_admin.id
+            WHERE tasks.assigned_to = ?
             ORDER BY
                 CASE
-                    WHEN status = 'bekliyor' THEN 0
-                    WHEN status = 'devam ediyor' THEN 1
-                    WHEN status = 'tamamlandı' THEN 2
+                    WHEN tasks.status = 'bekliyor' THEN 0
+                    WHEN tasks.status = 'devam ediyor' THEN 1
+                    WHEN tasks.status = 'tamamlandı' THEN 2
                     ELSE 3
                 END,
-                due_date ASC
+                tasks.due_date ASC
         ");
 
 
@@ -1085,6 +1479,139 @@ try {
                 PDO::FETCH_ASSOC
             );
 
+        $submission_files_by_submission = [];
+        $submission_ids = [];
+
+        foreach ($all_submissions as $submission_row) {
+
+            $current_submission_id =
+                (int) ($submission_row["id"] ?? 0);
+
+            if ($current_submission_id > 0) {
+                $submission_ids[] = $current_submission_id;
+            }
+
+        }
+
+        $submission_ids = array_values(
+            array_unique($submission_ids)
+        );
+
+        if (!empty($submission_ids)) {
+
+            try {
+
+                $file_placeholders = implode(
+                    ",",
+                    array_fill(0, count($submission_ids), "?")
+                );
+
+                $submission_files_stmt = $db->prepare(
+                    "SELECT submission_id, original_name, file_path "
+                    . "FROM task_submission_files "
+                    . "WHERE submission_id IN ("
+                    . $file_placeholders
+                    . ") ORDER BY id ASC"
+                );
+
+                $submission_files_stmt->execute($submission_ids);
+
+                foreach (
+                    $submission_files_stmt->fetchAll(PDO::FETCH_ASSOC)
+                    as $submission_file_row
+                ) {
+
+                    $submission_files_by_submission[
+                        (int) $submission_file_row["submission_id"]
+                    ][] = $submission_file_row;
+
+                }
+
+            } catch (PDOException $e) {
+
+                // Yardımcı tablo kurulmamışsa eski tek ek alanı kullanılır.
+                $submission_files_by_submission = [];
+
+            }
+
+        }
+
+        $submission_project_root = realpath(__DIR__ . "/..");
+        $submission_upload_root = realpath(
+            __DIR__ . "/../uploads/task_submissions"
+        );
+
+        foreach ($all_submissions as &$submission) {
+
+            $submission["attachments"] = [];
+
+            $attachment_rows =
+                $submission_files_by_submission[
+                    (int) ($submission["id"] ?? 0)
+                ] ?? [];
+
+            foreach ($attachment_rows as $attachment_row) {
+
+                $attachment_path =
+                    (string) ($attachment_row["file_path"] ?? "");
+                $attachment_url = null;
+
+                if (
+                    $attachment_path !== ""
+                    && $submission_project_root !== false
+                    && $submission_upload_root !== false
+                ) {
+
+                    $attachment_candidate = realpath(
+                        $submission_project_root
+                        . DIRECTORY_SEPARATOR
+                        . ltrim($attachment_path, "/\\")
+                    );
+
+                    if (
+                        $attachment_candidate !== false
+                        && is_file($attachment_candidate)
+                        && strpos(
+                            $attachment_candidate,
+                            $submission_upload_root
+                            . DIRECTORY_SEPARATOR
+                        ) === 0
+                    ) {
+
+                        $attachment_url =
+                            "../"
+                            . str_replace(
+                                DIRECTORY_SEPARATOR,
+                                "/",
+                                ltrim(
+                                    str_replace(
+                                        $submission_project_root,
+                                        "",
+                                        $attachment_candidate
+                                    ),
+                                    "/\\"
+                                )
+                            );
+
+                    }
+
+                }
+
+                if ($attachment_url !== null) {
+
+                    $submission["attachments"][] = [
+                        "name" => $attachment_row["original_name"]
+                            ?: basename($attachment_path),
+                        "url" => $attachment_url
+                    ];
+
+                }
+
+            }
+
+        }
+
+        unset($submission);
 
         foreach ($all_submissions as $submission) {
 
@@ -1585,7 +2112,7 @@ foreach ($task_submissions as $task_id => $submissions) {
 
 <link
     rel="stylesheet"
-    href="../css/style.css?v=user-dashboard-20260818"
+    href="../css/style.css?v=upload-card-lavanta-20260819"
 >
 
 
@@ -1594,7 +2121,7 @@ foreach ($task_submissions as $task_id => $submissions) {
 </head>
 
 
-<body>
+<body data-initial-section="<?= htmlspecialchars($active_section, ENT_QUOTES, "UTF-8") ?>">
 
 
 <!-- ============================================================
@@ -1603,8 +2130,30 @@ foreach ($task_submissions as $task_id => $submissions) {
 
 <div class="sidebar">
 
-    <h2>TODO APP</h2>
+    <h2 class="brand-title">TODO APP</h2>
 
+    <div class="sidebar-profile-summary">
+        <div class="sidebar-profile-avatar">
+            <?php if ($profile_image_url !== ""): ?>
+                <img
+                    src="<?= htmlspecialchars($profile_image_url, ENT_QUOTES, "UTF-8") ?>"
+                    alt="Profil fotoğrafı"
+                >
+            <?php else: ?>
+                <span class="profile-placeholder" aria-hidden="true"></span>
+            <?php endif; ?>
+        </div>
+        <strong><?= htmlspecialchars($user_name, ENT_QUOTES, "UTF-8") ?></strong>
+        <span>Kullanıcı</span>
+    </div>
+
+    <a
+        href="#profil"
+        class="menu-link"
+        data-section="profil"
+    >
+        👤 Profil
+    </a>
 
     <a
         href="#dashboard"
@@ -1680,6 +2229,187 @@ foreach ($task_submissions as $task_id => $submissions) {
 <div class="container">
 
 
+<?php if (!empty($message)): ?>
+
+    <div class="success">
+
+        <?= htmlspecialchars(
+            $message,
+            ENT_QUOTES,
+            "UTF-8"
+        ) ?>
+
+    </div>
+
+<?php endif; ?>
+
+
+<?php if (!empty($error)): ?>
+
+    <div class="error">
+
+        <?= nl2br(
+            htmlspecialchars(
+                $error,
+                ENT_QUOTES,
+                "UTF-8"
+            )
+        ) ?>
+
+    </div>
+
+<?php endif; ?>
+
+
+<!-- ============================================================
+     PROFİL
+============================================================ -->
+
+<section
+    id="section-profil"
+    class="panel-section"
+>
+    <div class="section-title user-profile-page-heading">
+        <h1>Profilim</h1>
+        <p>Hesap bilgilerinizi ve profil fotoğrafınızı buradan yönetebilirsiniz.</p>
+    </div>
+
+    <div class="box user-profile-tab">
+        <div class="user-profile-tab-header">
+            <div class="user-profile-tab-avatar">
+                <?php if ($profile_image_url !== ""): ?>
+                    <img
+                        src="<?= htmlspecialchars($profile_image_url, ENT_QUOTES, "UTF-8") ?>"
+                        alt="Profil fotoğrafı"
+                    >
+                <?php else: ?>
+                    <span class="profile-placeholder" aria-hidden="true"></span>
+                <?php endif; ?>
+            </div>
+
+            <div class="user-profile-tab-identity">
+                <span class="user-profile-tab-eyebrow">HESAP BİLGİLERİ</span>
+                <h2><?= htmlspecialchars($user_name, ENT_QUOTES, "UTF-8") ?></h2>
+                <span class="profile-role-badge">Kullanıcı</span>
+                <p>Görevlerinizi, günlük çalışmalarınızı ve bildirimlerinizi bu alandan takip edebilirsiniz.</p>
+            </div>
+        </div>
+
+        <?php if (!empty($message)): ?>
+            <div class="success user-profile-tab-message">
+                <?= htmlspecialchars($message, ENT_QUOTES, "UTF-8") ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($error)): ?>
+            <div class="error user-profile-tab-message">
+                <?= nl2br(htmlspecialchars($error, ENT_QUOTES, "UTF-8")) ?>
+            </div>
+        <?php endif; ?>
+
+        <div class="user-profile-tab-divider"></div>
+
+        <div class="user-profile-tab-actions">
+            <form method="POST" enctype="multipart/form-data" class="profile-upload-form">
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?= htmlspecialchars($csrf_token, ENT_QUOTES, "UTF-8") ?>"
+                >
+                <input type="hidden" name="update_profile_image" value="1">
+
+                <div class="upload-field-heading">
+                    <span>Profil Fotoğrafı</span>
+                    <small>JPG, JPEG veya PNG · Maks. 5 MB</small>
+                </div>
+
+                <label
+                    for="userProfileImageInput"
+                    class="upload-dropzone profile-upload-dropzone"
+                    data-upload-dropzone
+                >
+                    <span class="upload-dropzone-icon" aria-hidden="true">+</span>
+                    <span class="upload-dropzone-copy">
+                        <strong>Fotoğraf yüklemek için tıklayın veya sürükleyin</strong>
+                        <small>İzin verilen uzantılar: JPG, JPEG, PNG · En fazla 5 MB</small>
+                        <span class="upload-dropzone-selection" id="userProfileFileName" data-upload-file-summary hidden>
+                            Henüz dosya seçilmedi
+                        </span>
+                    </span>
+                </label>
+
+                <input
+                    type="file"
+                    id="userProfileImageInput"
+                    name="profile_image"
+                    accept=".jpg,.jpeg,.png"
+                    class="profile-file-input upload-input"
+                    data-upload-input
+                >
+
+                <button
+                    type="submit"
+                    class="profile-action-button success"
+                    id="userProfileUploadSubmit"
+                    hidden
+                >
+                    Fotoğrafı Yükle
+                </button>
+            </form>
+
+            <?php if ($profile_image !== ""): ?>
+                <form
+                    method="POST"
+                    class="profile-delete-form"
+                    onsubmit="return confirm('Profil fotoğrafını silmek istediğinize emin misiniz?');"
+                >
+                    <input
+                        type="hidden"
+                        name="csrf_token"
+                        value="<?= htmlspecialchars($csrf_token, ENT_QUOTES, "UTF-8") ?>"
+                    >
+                    <input type="hidden" name="delete_profile_image" value="1">
+                    <button type="submit" class="profile-action-button danger">
+                        🗑 Fotoğrafı Sil
+                    </button>
+                </form>
+            <?php endif; ?>
+        </div>
+
+        <a
+            href="#dashboard"
+            class="profile-back-link menu-link"
+            data-section="dashboard"
+        >
+            ← Dashboard'a Dön
+        </a>
+    </div>
+</section>
+
+<script>
+const userProfileImageInput =
+    document.getElementById("userProfileImageInput");
+const userProfileUploadSubmit =
+    document.getElementById("userProfileUploadSubmit");
+const userProfileFileName =
+    document.getElementById("userProfileFileName");
+
+if (userProfileImageInput && userProfileUploadSubmit) {
+    userProfileImageInput.addEventListener("change", function () {
+        const hasFile = this.files && this.files.length > 0;
+
+        userProfileUploadSubmit.hidden = !hasFile;
+
+        if (userProfileFileName) {
+            userProfileFileName.textContent = hasFile
+                ? this.files[0].name
+                : "Henüz dosya seçilmedi";
+            userProfileFileName.hidden = !hasFile;
+        }
+    });
+}
+</script>
+
 <!-- ============================================================
      DASHBOARD
 ============================================================ -->
@@ -1710,36 +2440,6 @@ foreach ($task_submissions as $task_id => $submissions) {
         </p>
 
     </div>
-
-
-    <?php if (!empty($message)): ?>
-
-        <div class="success">
-
-            <?= htmlspecialchars(
-                $message,
-                ENT_QUOTES,
-                "UTF-8"
-            ) ?>
-
-        </div>
-
-    <?php endif; ?>
-
-
-    <?php if (!empty($error)): ?>
-
-        <div class="error">
-
-            <?= htmlspecialchars(
-                $error,
-                ENT_QUOTES,
-                "UTF-8"
-            ) ?>
-
-        </div>
-
-    <?php endif; ?>
 
 
     <div class="dashboard-cards">
@@ -2309,6 +3009,31 @@ foreach ($task_submissions as $task_id => $submissions) {
 
                         </span>
 
+
+                        <span>
+
+                            👤 Atayan:
+
+                            <?= htmlspecialchars(
+                                !empty($task["assigned_by_name"])
+                                    ? $task["assigned_by_name"]
+                                    : "Belirtilmemiş",
+                                ENT_QUOTES,
+                                "UTF-8"
+                            ) ?>
+
+                            <?php if (!empty($task["assigned_by_username"])): ?>
+
+                                (@<?= htmlspecialchars(
+                                    $task["assigned_by_username"],
+                                    ENT_QUOTES,
+                                    "UTF-8"
+                                ) ?>)
+
+                            <?php endif; ?>
+
+                        </span>
+
                     </div>
 
 
@@ -2375,17 +3100,49 @@ foreach ($task_submissions as $task_id => $submissions) {
                                     ></textarea>
 
 
+                                    <div class="upload-field-heading">
+                                        <span>Dosya Ekleri</span>
+                                        <small>(Opsiyonel · Maks. 10 MB / dosya)</small>
+                                    </div>
+
+                                    <label
+                                        for="dailyTaskFiles_<?= (int) $current_task_id ?>"
+                                        class="upload-dropzone"
+                                        data-upload-dropzone
+                                    >
+                                        <span class="upload-dropzone-icon" aria-hidden="true">+</span>
+                                        <span class="upload-dropzone-copy">
+                                            <strong>Dosya yüklemek için tıklayın veya sürükleyin</strong>
+                                            <small>İzin verilen uzantılar: PDF, DOC, DOCX, JPG, JPEG, PNG, XLS, XLSX · En fazla 10 MB</small>
+                                            <span class="upload-dropzone-selection" data-upload-file-summary hidden>Henüz dosya seçilmedi</span>
+                                        </span>
+                                    </label>
+
                                     <input
                                         type="file"
-                                        name="submission_file"
+                                        id="dailyTaskFiles_<?= (int) $current_task_id ?>"
+                                        name="submission_files[]"
+                                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
+                                        multiple
+                                        class="upload-input"
+                                        data-upload-input
                                     >
 
+                                    <div
+                                        class="selected-files-list"
+                                        data-selected-files-list
+                                        aria-live="polite"
+                                    ></div>
 
-                                    <small class="upload-help">
-                                        Maksimum 10 MB.
-                                        JPG, PNG, PDF, DOCX, XLSX,
-                                        PPTX, ZIP vb. desteklenmektedir.
-                                    </small>
+
+                                    <div
+                                        class="error file-upload-error"
+                                        role="alert"
+                                        hidden
+                                    ></div>
+
+
+                                    
 
 
                                     <button
@@ -2489,7 +3246,40 @@ foreach ($task_submissions as $task_id => $submissions) {
                                         </div>
 
 
-                                        <?php if (!empty($submission["file_path"])): ?>
+                                        <?php if (!empty($submission["attachments"])): ?>
+
+                                            <div class="submission-files">
+
+                                                <strong>
+                                                    📎 Ek Dosyalar
+                                                </strong>
+
+                                                <?php foreach ($submission["attachments"] as $attachment): ?>
+
+                                                    <a
+                                                        href="<?= htmlspecialchars(
+                                                            $attachment["url"],
+                                                            ENT_QUOTES,
+                                                            "UTF-8"
+                                                        ) ?>"
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        class="submission-file"
+                                                    >
+
+                                                        <?= htmlspecialchars(
+                                                            $attachment["name"],
+                                                            ENT_QUOTES,
+                                                            "UTF-8"
+                                                        ) ?>
+
+                                                    </a>
+
+                                                <?php endforeach; ?>
+
+                                            </div>
+
+                                        <?php elseif (!empty($submission["file_path"])): ?>
 
                                             <a
                                                 href="../<?= htmlspecialchars(
@@ -2498,6 +3288,7 @@ foreach ($task_submissions as $task_id => $submissions) {
                                                     "UTF-8"
                                                 ) ?>"
                                                 target="_blank"
+                                                rel="noopener noreferrer"
                                                 class="submission-file"
                                             >
 
@@ -2646,22 +3437,40 @@ foreach ($task_submissions as $task_id => $submissions) {
 
                 <div class="form-group">
 
-                    <label>
-                        Dosya Eki
+                    <div class="upload-field-heading">
+                        <span>Dosya Eki</span>
+                        <small>(Opsiyonel · Maks. 10 MB)</small>
+                    </div>
+
+                    <label
+                        for="activityFileInput"
+                        class="upload-dropzone"
+                        data-upload-dropzone
+                    >
+                        <span class="upload-dropzone-icon" aria-hidden="true">+</span>
+                        <span class="upload-dropzone-copy">
+                            <strong>Dosya yüklemek için tıklayın veya sürükleyin</strong>
+                            <small>İzin verilen uzantılar: PDF, DOC, DOCX, JPG, JPEG, PNG, XLS, XLSX · En fazla 10 MB</small>
+                            <span class="upload-dropzone-selection" data-upload-file-summary hidden>Henüz dosya seçilmedi</span>
+                        </span>
                     </label>
 
                     <input
                         type="file"
+                        id="activityFileInput"
                         name="activity_file"
+                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
+                        class="upload-input"
+                        data-upload-input
                     >
 
-                    <small class="muted-text">
+                    <div
+                        class="error file-upload-error"
+                        role="alert"
+                        hidden
+                    ></div>
 
-                        Maksimum 10 MB.
-                        JPG, PNG, PDF, DOCX, XLSX,
-                        PPTX, ZIP vb. desteklenmektedir.
-
-                    </small>
+                    
 
                 </div>
 
@@ -2910,7 +3719,9 @@ foreach ($task_submissions as $task_id => $submissions) {
                         📅
 
                         <?= htmlspecialchars(
-                            $activity["created_at"],
+                            format_turkey_datetime(
+                                $activity["created_at"]
+                            ),
                             ENT_QUOTES,
                             "UTF-8"
                         ) ?>
@@ -2968,37 +3779,6 @@ foreach ($task_submissions as $task_id => $submissions) {
 
     </div>
 
-
-    <?php if ($unread_count > 0): ?>
-
-
-        <form method="POST">
-
-            <input
-                type="hidden"
-                name="csrf_token"
-                value="<?= htmlspecialchars(
-                    $csrf_token,
-                    ENT_QUOTES,
-                    "UTF-8"
-                ) ?>"
-            >
-
-
-            <button
-                type="submit"
-                name="mark_notifications_read"
-                class="primary-button notifications-read-button"
-            >
-
-                ✓ Tümünü Okundu İşaretle
-
-            </button>
-
-        </form>
-
-
-    <?php endif; ?>
 
 
     <?php if (empty($notifications)): ?>
@@ -3076,10 +3856,61 @@ foreach ($task_submissions as $task_id => $submissions) {
                     📅
 
                     <?= htmlspecialchars(
-                        $notification["created_at"],
+                        format_turkey_datetime(
+                            $notification["created_at"]
+                        ),
                         ENT_QUOTES,
                         "UTF-8"
                     ) ?>
+
+                </div>
+
+
+                <div class="notification-card-actions">
+
+                    <form method="POST">
+
+                        <input
+                            type="hidden"
+                            name="csrf_token"
+                            value="<?= htmlspecialchars(
+                                $csrf_token,
+                                ENT_QUOTES,
+                                "UTF-8"
+                            ) ?>"
+                        >
+
+                        <input
+                            type="hidden"
+                            name="notification_id"
+                            value="<?= (int) $notification["id"] ?>"
+                        >
+
+                        <?php if ((int) $notification["is_read"] === 0): ?>
+
+                            <button
+                                type="submit"
+                                name="notification_action"
+                                value="mark_read"
+                                class="notification-action-button notification-read-action"
+                            >
+                                ✓ Okundu Yap
+                            </button>
+
+                        <?php else: ?>
+
+                            <button
+                                type="submit"
+                                name="notification_action"
+                                value="mark_unread"
+                                class="notification-action-button notification-unread-action"
+                            >
+                                ↺ Okunmadı Yap
+                            </button>
+
+                        <?php endif; ?>
+
+                    </form>
 
                 </div>
 
@@ -3238,21 +4069,17 @@ document.addEventListener(
                 ""
             );
 
+        const initialSection =
+            document.body.dataset.initialSection || "dashboard";
 
-        if (hash) {
+        const requestedSection = hash || initialSection;
+        const sectionExists =
+            document.getElementById(
+                "section-" + requestedSection
+            );
 
-            const sectionExists =
-                document.getElementById(
-                    "section-" + hash
-                );
-
-
-            if (sectionExists) {
-
-                showSection(hash);
-
-            }
-
+        if (sectionExists) {
+            showSection(requestedSection);
         }
 
     }
@@ -3633,6 +4460,298 @@ if (clearTaskFilters) {
     );
 
 }
+
+
+
+// ============================================================
+// DOSYA TÜRÜNÜ FORM GÖNDERİLMEDEN ÖNCE KONTROL ET
+// ============================================================
+
+const allowedUploadExtensions = new Set([
+    "pdf",
+    "doc",
+    "docx",
+    "jpg",
+    "jpeg",
+    "png",
+    "xls",
+    "xlsx"
+]);
+
+const allowedUploadMimeTypes = new Set([
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "image/jpeg",
+    "image/png",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+]);
+
+const uploadTypeErrorHtml =
+    "Yüklenen dosya şu dosya türlerinden biri olmalıdır: "
+    + "pdf, doc, docx, jpg, jpeg, png, xls, xlsx."
+    + "<br>"
+    + "Yüklenen dosya şu dosya türlerinden biri olmalıdır: "
+    + "application/pdf, application/msword, "
+    + "application/vnd.openxmlformats-officedocument.wordprocessingml.document, "
+    + "image/jpeg, image/png, application/vnd.ms-excel, "
+    + "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.";
+
+function getSelectedFiles(input) {
+
+    return Array.from(input.files || []);
+
+}
+
+
+function showUploadError(input, message) {
+
+    const form = input.form;
+    const errorBox = form
+        ? form.querySelector(".file-upload-error")
+        : null;
+
+    if (!errorBox) {
+        return;
+    }
+
+    errorBox.innerHTML = message;
+    errorBox.hidden = false;
+
+}
+
+
+function updateUploadCardSummary(input) {
+
+    const form = input.form;
+    const summary = form
+        ? form.querySelector("[data-upload-file-summary]")
+        : null;
+    const files = getSelectedFiles(input);
+
+    if (!summary) {
+        return;
+    }
+
+    if (files.length === 0) {
+        summary.textContent = "Henüz dosya seçilmedi";
+        summary.hidden = true;
+        return;
+    }
+
+    summary.textContent = files.length === 1
+        ? files[0].name
+        : files.length + " dosya seçildi";
+    summary.hidden = false;
+
+}
+
+
+function updateSelectedFileList(input) {
+
+    const form = input.form;
+    const list = form
+        ? form.querySelector("[data-selected-files-list]")
+        : null;
+
+    if (!list) {
+        return;
+    }
+
+    list.innerHTML = "";
+
+    getSelectedFiles(input).forEach(function (file, index) {
+
+        const item = document.createElement("div");
+        item.className = "selected-file-item";
+
+        const name = document.createElement("span");
+        name.className = "selected-file-name";
+        name.textContent = file.name;
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "remove-selected-file";
+        removeButton.textContent = "Kaldır";
+        removeButton.dataset.fileIndex = String(index);
+
+        removeButton.addEventListener("click", function () {
+
+            const dataTransfer = new DataTransfer();
+
+            getSelectedFiles(input).forEach(function (selectedFile, fileIndex) {
+
+                if (fileIndex !== index) {
+                    dataTransfer.items.add(selectedFile);
+                }
+
+            });
+
+            input.files = dataTransfer.files;
+            updateSelectedFileList(input);
+            updateUploadCardSummary(input);
+            validateUploadInput(input);
+
+        });
+
+        item.appendChild(name);
+        item.appendChild(removeButton);
+        list.appendChild(item);
+
+    });
+
+}
+
+
+function validateUploadInput(input) {
+
+    const form = input.form;
+    const errorBox = form
+        ? form.querySelector(".file-upload-error")
+        : null;
+    const files = getSelectedFiles(input);
+
+    if (errorBox) {
+        errorBox.hidden = true;
+        errorBox.innerHTML = "";
+    }
+
+    if (files.length === 0) {
+        return true;
+    }
+
+    if (files.length > 10) {
+
+        showUploadError(
+            input,
+            "Bir gönderimde en fazla 10 dosya seçebilirsiniz."
+        );
+
+        return false;
+
+    }
+
+    for (const file of files) {
+
+        const fileName = file.name.toLowerCase();
+        const lastDot = fileName.lastIndexOf(".");
+        const extension = lastDot >= 0
+            ? fileName.substring(lastDot + 1)
+            : "";
+        const mimeType = file.type.toLowerCase();
+
+        const isValid =
+            allowedUploadExtensions.has(extension) &&
+            allowedUploadMimeTypes.has(mimeType);
+
+        if (!isValid) {
+
+            showUploadError(input, uploadTypeErrorHtml);
+            return false;
+
+        }
+
+    }
+
+    return true;
+}
+
+document.querySelectorAll("input[data-upload-input]").forEach(function (input) {
+
+    const dropzone = input.id
+        ? document.querySelector(
+            'label[data-upload-dropzone][for="' + input.id + '"]'
+        )
+        : null;
+
+    updateUploadCardSummary(input);
+
+    if (dropzone) {
+
+        ["dragenter", "dragover"].forEach(function (eventName) {
+            dropzone.addEventListener(eventName, function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                dropzone.classList.add("is-dragover");
+            });
+        });
+
+        ["dragleave", "dragend"].forEach(function (eventName) {
+            dropzone.addEventListener(eventName, function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+                dropzone.classList.remove("is-dragover");
+            });
+        });
+
+        dropzone.addEventListener("drop", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            dropzone.classList.remove("is-dragover");
+
+            const droppedFiles = event.dataTransfer && event.dataTransfer.files
+                ? Array.from(event.dataTransfer.files)
+                : [];
+
+            if (droppedFiles.length === 0) {
+                return;
+            }
+
+            const dataTransfer = new DataTransfer();
+            const filesToAdd = input.multiple
+                ? droppedFiles
+                : droppedFiles.slice(0, 1);
+
+            filesToAdd.forEach(function (file) {
+                dataTransfer.items.add(file);
+            });
+
+            input.files = dataTransfer.files;
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+
+    }
+
+    input.addEventListener("change", function () {
+        updateUploadCardSummary(input);
+
+        if (
+            input.name === "activity_file"
+            || input.name === "submission_files[]"
+        ) {
+            updateSelectedFileList(input);
+            validateUploadInput(input);
+        }
+    });
+
+    if (
+        input.form
+        && (
+            input.name === "activity_file"
+            || input.name === "submission_files[]"
+        )
+    ) {
+        input.form.addEventListener("submit", function (event) {
+
+            if (!validateUploadInput(input)) {
+                event.preventDefault();
+
+                const errorBox = input.form.querySelector(
+                    ".file-upload-error"
+                );
+
+                if (errorBox) {
+                    errorBox.scrollIntoView({
+                        behavior: "smooth",
+                        block: "center"
+                    });
+                }
+            }
+        });
+    }
+
+});
 
 </script>
 

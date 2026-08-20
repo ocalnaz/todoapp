@@ -6,6 +6,41 @@ require_once "../config/database.php";
 
 
 // ==================================================
+// SQLITE ÇOKLU DOSYA TABLOSU
+// ==================================================
+
+try {
+
+    $db->exec("PRAGMA foreign_keys = ON");
+
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS task_submission_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_id INTEGER NOT NULL,
+            original_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (submission_id)
+                REFERENCES task_submissions (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        )
+    ");
+
+    $db->exec("
+        CREATE INDEX IF NOT EXISTS
+        idx_task_submission_files_submission_id
+        ON task_submission_files (submission_id)
+    ");
+
+} catch (PDOException $e) {
+
+    // Tablo daha önce SQL şemasıyla oluşturulduysa işlem normal şekilde sürer.
+
+}
+
+
+// ==================================================
 // GİRİŞ KONTROLÜ
 // ==================================================
 
@@ -134,6 +169,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         ts.task_id,
                         ts.user_id,
                         ts.status,
+                        ts.file_path,
                         t.title
                     FROM task_submissions ts
                     INNER JOIN tasks t
@@ -321,6 +357,59 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     elseif ($action === "delete") {
 
+                        $paths_to_delete = [];
+
+                        if (!empty($submission["file_path"])) {
+                            $paths_to_delete[] =
+                                (string) $submission["file_path"];
+                        }
+
+                        try {
+
+                            $file_path_stmt = $db->prepare("
+                                SELECT file_path
+                                FROM task_submission_files
+                                WHERE submission_id = ?
+                            ");
+
+                            $file_path_stmt->execute([
+                                $submission_id
+                            ]);
+
+                            foreach (
+                                $file_path_stmt->fetchAll(PDO::FETCH_COLUMN)
+                                as $extra_file_path
+                            ) {
+
+                                if ((string) $extra_file_path !== "") {
+                                    $paths_to_delete[] =
+                                        (string) $extra_file_path;
+                                }
+
+                            }
+
+                        } catch (PDOException $e) {
+
+                            // Yardımcı tablo yoksa eski tek dosya silme akışı sürer.
+
+                        }
+
+                        try {
+
+                            $delete_file_rows_stmt = $db->prepare("
+                                DELETE FROM task_submission_files
+                                WHERE submission_id = ?
+                            ");
+
+                            $delete_file_rows_stmt->execute([
+                                $submission_id
+                            ]);
+
+                        } catch (PDOException $e) {
+
+                            // Yardımcı tablo yoksa eski tek dosya akışı sürer.
+
+                        }
 
                         $stmt = $db->prepare("
                             DELETE FROM task_submissions
@@ -331,6 +420,44 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             $submission_id
                         ]);
 
+                        $project_root_for_delete = realpath(__DIR__ . "/..");
+                        $upload_root_for_delete = realpath(
+                            __DIR__ . "/../uploads/task_submissions"
+                        );
+
+                        if (
+                            $project_root_for_delete !== false
+                            && $upload_root_for_delete !== false
+                        ) {
+
+                            foreach (
+                                array_unique($paths_to_delete)
+                                as $path_to_delete
+                            ) {
+
+                                $candidate_to_delete = realpath(
+                                    $project_root_for_delete
+                                    . DIRECTORY_SEPARATOR
+                                    . ltrim($path_to_delete, "/\\")
+                                );
+
+                                if (
+                                    $candidate_to_delete !== false
+                                    && is_file($candidate_to_delete)
+                                    && strpos(
+                                        $candidate_to_delete,
+                                        $upload_root_for_delete
+                                        . DIRECTORY_SEPARATOR
+                                    ) === 0
+                                ) {
+
+                                    @unlink($candidate_to_delete);
+
+                                }
+
+                            }
+
+                        }
 
                         $message =
                             "Gönderilen çalışma silindi.";
@@ -374,7 +501,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 // GÖNDERİLEN ÇALIŞMALARI GETİR
 // ==================================================
 
-$stmt = $db->query("
+$stmt = $db->prepare("
     SELECT
 
         task_submissions.id,
@@ -392,7 +519,9 @@ $stmt = $db->query("
         tasks.status AS task_status,
 
         users.full_name,
-        users.username
+        users.username,
+        assigned_by_user.full_name AS assigned_by_name,
+        assigned_by_user.username AS assigned_by_username
 
     FROM task_submissions
 
@@ -402,12 +531,108 @@ $stmt = $db->query("
     INNER JOIN users
         ON task_submissions.user_id = users.id
 
+    LEFT JOIN users assigned_by_user
+        ON tasks.assigned_by = assigned_by_user.id
+
+    WHERE tasks.assigned_by = :admin_id
+
     ORDER BY task_submissions.id DESC
 ");
 
+$stmt->execute([
+    ":admin_id" => $admin_id
+]);
 
 $submissions =
     $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+
+$submission_files_by_submission = [];
+$submission_ids = [];
+
+foreach ($submissions as $submission_row) {
+
+    $current_submission_id =
+        (int) ($submission_row["id"] ?? 0);
+
+    if ($current_submission_id > 0) {
+        $submission_ids[] = $current_submission_id;
+    }
+
+}
+
+$submission_ids = array_values(
+    array_unique($submission_ids)
+);
+
+$attachment_name_column = "original_name";
+
+try {
+
+    $attachment_columns_stmt = $db->query(
+        "PRAGMA table_info(task_submission_files)"
+    );
+
+    $attachment_columns = $attachment_columns_stmt->fetchAll(
+        PDO::FETCH_COLUMN,
+        1
+    );
+
+    if (
+        !in_array("original_name", $attachment_columns, true)
+        && in_array("file_name", $attachment_columns, true)
+    ) {
+
+        $attachment_name_column = "file_name";
+
+    }
+
+} catch (PDOException $e) {
+
+    // Varsayılan şema original_name kolonunu kullanır.
+
+}
+
+if (!empty($submission_ids)) {
+
+    try {
+
+        $file_placeholders = implode(
+            ",",
+            array_fill(0, count($submission_ids), "?")
+        );
+
+        $submission_files_stmt = $db->prepare(
+            "SELECT id, submission_id, "
+            . $attachment_name_column
+            . " AS original_name, file_path "
+            . "FROM task_submission_files "
+            . "WHERE submission_id IN ("
+            . $file_placeholders
+            . ") ORDER BY id ASC"
+        );
+
+        $submission_files_stmt->execute($submission_ids);
+
+        foreach (
+            $submission_files_stmt->fetchAll(PDO::FETCH_ASSOC)
+            as $submission_file_row
+        ) {
+
+            $submission_files_by_submission[
+                (int) $submission_file_row["submission_id"]
+            ][] = $submission_file_row;
+
+        }
+
+    } catch (PDOException $e) {
+
+        // Yardımcı tablo kurulmamışsa eski tek dosya gösterimi çalışmaya devam eder.
+        $submission_files_by_submission = [];
+
+    }
+
+}
 
 
 $project_root = realpath(__DIR__ . "/..");
@@ -467,6 +692,74 @@ foreach ($submissions as &$submission) {
                 );
         }
     }
+
+    $submission["attachments"] = [];
+
+    $attachment_rows =
+        $submission_files_by_submission[
+            (int) ($submission["id"] ?? 0)
+        ] ?? [];
+
+    foreach ($attachment_rows as $attachment_row) {
+
+        $attachment_path =
+            (string) ($attachment_row["file_path"] ?? "");
+        $attachment_url = null;
+
+        if (
+            $attachment_path !== ""
+            && $project_root !== false
+            && $submission_upload_root !== false
+        ) {
+
+            $attachment_candidate = realpath(
+                $project_root
+                . DIRECTORY_SEPARATOR
+                . ltrim($attachment_path, "/\\")
+            );
+
+            if (
+                $attachment_candidate !== false
+                && is_file($attachment_candidate)
+                && strpos(
+                    $attachment_candidate,
+                    $submission_upload_root . DIRECTORY_SEPARATOR
+                ) === 0
+            ) {
+
+                $attachment_relative = ltrim(
+                    str_replace(
+                        $project_root,
+                        "",
+                        $attachment_candidate
+                    ),
+                    "/\\"
+                );
+
+                $attachment_url =
+                    "../"
+                    . str_replace(
+                        DIRECTORY_SEPARATOR,
+                        "/",
+                        $attachment_relative
+                    );
+
+            }
+
+        }
+
+        if ($attachment_url !== null) {
+
+            $submission["attachments"][] = [
+                "name" => $attachment_row["original_name"]
+                    ?: basename($attachment_path),
+                "url" => $attachment_url
+            ];
+
+        }
+
+    }
+
 }
 
 unset($submission);
@@ -494,7 +787,7 @@ unset($submission);
 
     <link
         rel="stylesheet"
-        href="../css/style.css"
+        href="../assets/css/style.css"
     >
 
 </head>
@@ -677,14 +970,45 @@ unset($submission);
                         <strong>
 
                             <?= htmlspecialchars(
-                                $submission["full_name"]
+                                $submission["full_name"],
+                                ENT_QUOTES,
+                                "UTF-8"
                             ) ?>
 
                         </strong>
 
                         (@<?= htmlspecialchars(
-                            $submission["username"]
+                            $submission["username"],
+                            ENT_QUOTES,
+                            "UTF-8"
                         ) ?>)
+
+                    </div>
+
+
+                    <div class="user-info">
+
+                        🧑‍💼
+
+                        <strong>
+                            Atayan:
+                        </strong>
+
+                        <?= htmlspecialchars(
+                            $submission["assigned_by_name"] ?? "-",
+                            ENT_QUOTES,
+                            "UTF-8"
+                        ) ?>
+
+                        <?php if (!empty($submission["assigned_by_username"])): ?>
+
+                            (@<?= htmlspecialchars(
+                                $submission["assigned_by_username"],
+                                ENT_QUOTES,
+                                "UTF-8"
+                            ) ?>)
+
+                        <?php endif; ?>
 
                     </div>
 
@@ -762,7 +1086,48 @@ unset($submission);
                     </div>
 
 
-                    <?php if (!empty($submission["file_url"])): ?>
+<?php if (!empty($submission["attachments"])): ?>
+
+                        <div class="submission-files">
+
+                            📎
+
+                            <strong>
+                                Ek Dosyalar
+                                (<?= count($submission["attachments"]) ?>):
+                            </strong>
+
+                            <?php foreach ($submission["attachments"] as $attachment): ?>
+
+                                <div class="submission-file-item submission-file">
+
+                                    <span class="submission-file-name">
+                                        <?= htmlspecialchars(
+                                            $attachment["name"],
+                                            ENT_QUOTES,
+                                            "UTF-8"
+                                        ) ?>
+                                    </span>
+
+                                    <a
+                                        href="<?= htmlspecialchars(
+                                            $attachment["url"],
+                                            ENT_QUOTES,
+                                            "UTF-8"
+                                        ) ?>"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                    >
+                                        Dosyayı Aç
+                                    </a>
+
+                                </div>
+
+                            <?php endforeach; ?>
+
+                        </div>
+
+                    <?php elseif (!empty($submission["file_url"])): ?>
 
                         <div class="date">
 
@@ -773,7 +1138,11 @@ unset($submission);
                             </strong>
 
                             <?= htmlspecialchars(
-                                $submission["file_name"] ?? "Dosyayı Aç",
+                                !empty($submission["file_name"])
+                                    ? $submission["file_name"]
+                                    : basename(
+                                        (string) ($submission["file_path"] ?? "")
+                                    ),
                                 ENT_QUOTES,
                                 "UTF-8"
                             ) ?>
@@ -824,7 +1193,7 @@ unset($submission);
                          DURUM
                     ================================================== -->
 
-                    <div style="margin-top: 15px;">
+                    <div class="submission-status">
 
                         <strong>
                             Durum:
@@ -883,10 +1252,7 @@ unset($submission);
                          İŞLEMLER
                     ================================================== -->
 
-                    <div
-                        class="actions"
-                        style="margin-top: 20px;"
-                    >
+                    <div class="actions submission-actions">
 
 
                                                 <?php if (
@@ -1045,10 +1411,7 @@ unset($submission);
                         === "onaylandı"
                     ): ?>
 
-                        <div
-                            class="success"
-                            style="margin-top: 20px;"
-                        >
+                        <div class="success submission-approved-message">
 
                             ✅
 

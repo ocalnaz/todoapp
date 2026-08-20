@@ -414,7 +414,7 @@ $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     <link
         rel="stylesheet"
-        href="../css/style.css"
+        href="../assets/css/style.css"
     >
 
 </head>

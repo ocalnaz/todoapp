@@ -5160,3 +5160,117 @@ body.dark-mode .upload-field-heading {
     color: #4e2b87 !important;
     border-left-color: transparent !important;
 } 
+
+
+/* ==================================================
+   ADMİN GİRİŞ LOGLARI
+================================================== */
+
+.login-log-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    border-radius: 12px;
+}
+
+.login-log-table {
+    min-width: 860px;
+}
+
+.login-log-table td {
+    vertical-align: top;
+}
+
+.login-log-username {
+    display: block;
+    margin-top: 4px;
+    color: #81798b;
+    font-size: 12px;
+}
+
+.login-log-user-agent {
+    max-width: 300px;
+    color: #81798b;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+body.dark-mode .login-log-username,
+body.dark-mode .login-log-user-agent {
+    color: #aaa2b1;
+}
+
+body.dark-mode .login-log-table td {
+    color: #d5cedb;
+}
+
+@media (max-width: 760px) {
+
+    .login-log-table-wrapper {
+        margin-right: -10px;
+    }
+
+}
+
+
+/* Koyu temada giriş logları tablosu */
+body.dark-mode .login-log-table {
+    background: #211e28;
+    border: 1px solid #3f3749;
+}
+
+body.dark-mode .login-log-table th {
+    background: #2b2534;
+    color: #dcd3e5;
+    border-bottom-color: #463d50;
+}
+
+body.dark-mode .login-log-table td {
+    background: #211e28;
+    color: #eee8f2;
+    border-bottom-color: #3f3749;
+}
+
+body.dark-mode .login-log-table tr:hover td {
+    background: #30283a;
+    color: #ffffff;
+}
+
+body.dark-mode .login-log-table strong {
+    color: #ffffff;
+}
+
+body.dark-mode .login-log-table .login-log-username,
+body.dark-mode .login-log-table .login-log-user-agent {
+    color: #c2b8cb;
+}
+
+body.dark-mode .login-log-table .status.onaylandi {
+    background: #294335;
+    border-color: #4e7a5e;
+    color: #ccebd3;
+}
+
+body.dark-mode .login-log-table .status.bekliyor {
+    background: #4a3c20;
+    border-color: #80672e;
+    color: #f2dca6;
+}
+
+body.dark-mode .login-log-table .status.revize {
+    background: #4a2e2c;
+    border-color: #8a514c;
+    color: #f2c5bd;
+}
+
+body.dark-mode .login-log-table .status.expired {
+    background: #4b292d;
+    border-color: #9b4d55;
+    color: #ffc2c7;
+}
+
+body.dark-mode .login-log-table .status.incelemede {
+    background: #2c384b;
+    border-color: #526b8d;
+    color: #c8d8f0;
+}

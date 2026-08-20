@@ -1,6 +1,8 @@
 <?php
 
-session_start();
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 
 require_once "../config/database.php";
 
@@ -30,10 +32,76 @@ if (
 
 
 $admin_id = (int) $_SESSION["user_id"];
+// ==================================================
+// ADMIN PROFİL FOTOĞRAFI
+// ==================================================
+
+$profile_image = null;
+
+try {
+
+    $profile_stmt = $db->prepare("
+        SELECT profile_image
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+    ");
+
+    $profile_stmt->execute([
+        $admin_id
+    ]);
+
+    $profile_data = $profile_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!empty($profile_data["profile_image"])) {
+
+        $profile_image = $profile_data["profile_image"];
+
+    }
+
+} catch (PDOException $e) {
+
+    $profile_image = null;
+
+}
 
 $message = "";
 $error = "";
 
+// ==================================================
+// ADMIN PROFİL BİLGİSİ
+// ==================================================
+
+$profile_image = null;
+
+try {
+
+    $profile_stmt = $db->prepare("
+        SELECT profile_image
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+    ");
+
+    $profile_stmt->execute([
+        $admin_id
+    ]);
+
+    $profile_data =
+        $profile_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!empty($profile_data["profile_image"])) {
+
+        $profile_image =
+            $profile_data["profile_image"];
+
+    }
+
+} catch (PDOException $e) {
+
+    $profile_image = null;
+
+}
 
 // ==================================================
 // CSRF TOKEN
@@ -46,6 +114,8 @@ if (empty($_SESSION["csrf_token"])) {
 }
 
 $csrf_token = $_SESSION["csrf_token"];
+
+$active_section = "dashboard";
 
 
 // ==================================================
@@ -70,6 +140,358 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             "Geçersiz istek. Lütfen sayfayı yenileyip tekrar deneyin.";
 
     } else {
+
+        // ==================================================
+        // TEKİL BİLDİRİMİ OKUNDU / OKUNMADI YAP
+        // ==================================================
+
+        if (isset($_POST["notification_action"])) {
+            $notification_action = (string) $_POST["notification_action"];
+            $notification_id = filter_var(
+                $_POST["notification_id"] ?? null,
+                FILTER_VALIDATE_INT,
+                ["options" => ["min_range" => 1]]
+            );
+            $active_section = "bildirimler";
+
+            if (
+                $notification_id === false ||
+                !in_array($notification_action, ["mark_read", "mark_unread"], true)
+            ) {
+                $error = "Geçersiz bildirim işlemi.";
+            } else {
+                try {
+                    $new_read_value = $notification_action === "mark_read" ? 1 : 0;
+                    $notification_update = $db->prepare(
+                        "UPDATE notifications
+                         SET is_read = ?
+                         WHERE id = ?
+                           AND user_id = ?"
+                    );
+                    $notification_update->execute([
+                        $new_read_value,
+                        $notification_id,
+                        $admin_id
+                    ]);
+
+                    if ($notification_update->rowCount() > 0) {
+                        $message = $new_read_value === 1
+                            ? "Bildirim okundu olarak işaretlendi."
+                            : "Bildirim okunmadı olarak işaretlendi.";
+                    } else {
+                        $error = "Bildirim bulunamadı veya bu işlem için yetkiniz yok.";
+                    }
+                } catch (PDOException $e) {
+                    $error = "Bildirim güncellenirken hata oluştu.";
+                }
+            }
+        }
+
+        // ==================================================
+        // ADMIN PROFİL FOTOĞRAFI GÜNCELLE
+        // ==================================================
+
+if (isset($_POST["update_profile_image"])) {
+
+    try {
+
+        if (
+            !isset($_FILES["profile_image"]) ||
+            $_FILES["profile_image"]["error"] === UPLOAD_ERR_NO_FILE
+        ) {
+
+            throw new Exception(
+                "Lütfen bir profil fotoğrafı seçin."
+            );
+
+        }
+
+        if (
+            $_FILES["profile_image"]["error"] !== UPLOAD_ERR_OK
+        ) {
+
+            throw new Exception(
+                "Profil fotoğrafı yüklenirken bir hata oluştu."
+            );
+
+        }
+
+        // Maksimum 5 MB
+        $max_profile_size = 5 * 1024 * 1024;
+
+        if (
+            $_FILES["profile_image"]["size"] > $max_profile_size
+        ) {
+
+            throw new Exception(
+                "Profil fotoğrafı en fazla 5 MB olabilir."
+            );
+
+        }
+
+        // Sadece JPG / JPEG / PNG
+        $allowed_profile_extensions = [
+            "jpg",
+            "jpeg",
+            "png"
+        ];
+
+        $original_name =
+            $_FILES["profile_image"]["name"];
+
+        $extension =
+            strtolower(
+                pathinfo(
+                    $original_name,
+                    PATHINFO_EXTENSION
+                )
+            );
+
+        if (
+            !in_array(
+                $extension,
+                $allowed_profile_extensions,
+                true
+            )
+        ) {
+
+            throw new Exception(
+                "Profil fotoğrafı sadece JPG, JPEG veya PNG olabilir."
+            );
+
+        }
+
+        // MIME kontrolü
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+
+        if ($finfo === false) {
+
+            throw new Exception(
+                "Dosya türü kontrol edilemedi."
+            );
+
+        }
+
+        $mime_type =
+            finfo_file(
+                $finfo,
+                $_FILES["profile_image"]["tmp_name"]
+            );
+
+        finfo_close($finfo);
+
+        $allowed_profile_mimes = [
+            "jpg"  => "image/jpeg",
+            "jpeg" => "image/jpeg",
+            "png"  => "image/png"
+        ];
+
+        if (
+            !isset($allowed_profile_mimes[$extension]) ||
+            $mime_type !== $allowed_profile_mimes[$extension]
+        ) {
+
+            throw new Exception(
+                "Geçersiz profil fotoğrafı."
+            );
+
+        }
+
+        // Profil klasörü
+        $profile_upload_dir =
+            "../uploads/profile_images/";
+
+        if (!is_dir($profile_upload_dir)) {
+
+            if (
+                !mkdir(
+                    $profile_upload_dir,
+                    0775,
+                    true
+                )
+            ) {
+
+                throw new Exception(
+                    "Profil fotoğrafı klasörü oluşturulamadı."
+                );
+
+            }
+
+        }
+
+        // Eski fotoğrafı al
+        $old_profile_stmt =
+            $db->prepare("
+                SELECT profile_image
+                FROM users
+                WHERE id = ?
+                LIMIT 1
+            ");
+
+        $old_profile_stmt->execute([
+            $admin_id
+        ]);
+
+        $old_profile_image =
+            $old_profile_stmt->fetchColumn();
+
+        // Yeni dosya adı
+        $safe_profile_name =
+            "profile_"
+            . $admin_id
+            . "_"
+            . bin2hex(
+                random_bytes(8)
+            )
+            . "."
+            . $extension;
+
+        $profile_target =
+            $profile_upload_dir
+            . $safe_profile_name;
+
+        if (
+            !move_uploaded_file(
+                $_FILES["profile_image"]["tmp_name"],
+                $profile_target
+            )
+        ) {
+
+            throw new Exception(
+                "Profil fotoğrafı sunucuya yüklenemedi."
+            );
+
+        }
+
+        // Veritabanına kaydet
+        $profile_path =
+            "uploads/profile_images/"
+            . $safe_profile_name;
+
+        $profile_update_stmt =
+            $db->prepare("
+                UPDATE users
+                SET profile_image = ?
+                WHERE id = ?
+            ");
+
+        $profile_update_stmt->execute([
+            $profile_path,
+            $admin_id
+        ]);
+
+        // Eski fotoğrafı sil
+        if (!empty($old_profile_image)) {
+
+            $old_profile_file =
+                dirname(__DIR__)
+                . DIRECTORY_SEPARATOR
+                . str_replace(
+                    "/",
+                    DIRECTORY_SEPARATOR,
+                    $old_profile_image
+                );
+
+            if (is_file($old_profile_file)) {
+
+                @unlink($old_profile_file);
+
+            }
+
+        }
+
+        $profile_image =
+            $profile_path;
+
+        $message =
+            "Profil fotoğrafınız başarıyla güncellendi.";
+
+    } catch (Exception $e) {
+
+        $error =
+            $e->getMessage();
+
+    } catch (PDOException $e) {
+
+        $error =
+            "Profil fotoğrafı güncellenirken bir hata oluştu.";
+
+    }
+
+}
+// ==================================================
+// ADMIN PROFİL FOTOĞRAFI SİL
+// ==================================================
+
+if (isset($_POST["delete_profile_image"])) {
+try {
+
+    // Mevcut fotoğrafı veritabanından al
+    $delete_stmt = $db->prepare("
+        SELECT profile_image
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+    ");
+
+    $delete_stmt->execute([
+        $admin_id
+    ]);
+
+    $delete_profile_image =
+        $delete_stmt->fetchColumn();
+
+
+    // Veritabanından fotoğraf yolunu kaldır
+    $delete_update_stmt = $db->prepare("
+        UPDATE users
+        SET profile_image = NULL
+        WHERE id = ?
+    ");
+
+    $delete_update_stmt->execute([
+        $admin_id
+    ]);
+
+
+    // Fiziksel dosyayı sil
+    if (!empty($delete_profile_image)) {
+
+        $delete_file =
+            dirname(__DIR__)
+            . DIRECTORY_SEPARATOR
+            . str_replace(
+                "/",
+                DIRECTORY_SEPARATOR,
+                $delete_profile_image
+            );
+
+        if (is_file($delete_file)) {
+
+            @unlink($delete_file);
+
+        }
+
+    }
+
+
+    // Ekrandaki profil fotoğrafını kaldır
+    $profile_image = null;
+
+    $message =
+        "Profil fotoğrafınız başarıyla silindi.";
+
+
+} catch (PDOException $e) {
+
+    $error =
+        "Profil fotoğrafı silinirken bir hata oluştu.";
+
+}
+
+
+}
+
 
 
         // ==================================================
@@ -1201,11 +1623,16 @@ $stmt = $db->prepare("
         t.status,
         t.created_at,
         u.full_name AS user_name,
-        u.username AS username
+        u.username AS username,
+        assigned_by_user.full_name AS assigned_by_name,
+        assigned_by_user.username AS assigned_by_username
     FROM tasks t
 
     INNER JOIN users u
         ON t.assigned_to = u.id
+
+    LEFT JOIN users assigned_by_user
+        ON t.assigned_by = assigned_by_user.id
 
     WHERE t.assigned_by = ?
 
@@ -1519,6 +1946,32 @@ $stmt->execute([
 $unread_count =
     (int) $stmt->fetchColumn();
 
+
+$profile_image_url = null;
+$normalized_profile_path = str_replace(
+    "\\",
+    "/",
+    ltrim((string) ($profile_image ?? ""), "/")
+);
+$profile_root = realpath(__DIR__ . "/../uploads/profile_images");
+$profile_candidate = realpath(
+    __DIR__ . "/../" . $normalized_profile_path
+);
+
+if (
+    $normalized_profile_path !== "" &&
+    strpos($normalized_profile_path, "..") === false &&
+    strpos($normalized_profile_path, "uploads/profile_images/") === 0 &&
+    $profile_root !== false &&
+    $profile_candidate !== false &&
+    strpos(
+        $profile_candidate,
+        $profile_root . DIRECTORY_SEPARATOR
+    ) === 0
+) {
+    $profile_image_url = "../" . $normalized_profile_path;
+}
+
 ?>
 
 <!DOCTYPE html>
@@ -1538,599 +1991,14 @@ $unread_count =
 
 <link
     rel="stylesheet"
-    href="../css/style.css"
+    href="../css/style.css?v=upload-card-lavanta-20260819"
 >
 
-<style>
-
-/* ==================================================
-   BÖLÜMLER
-================================================== */
-
-.panel-section {
-    display: none;
-}
-
-.panel-section.active-section {
-    display: block;
-    animation: sectionFade .25s ease;
-}
-
-@keyframes sectionFade {
-
-    from {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-
-}
-
-
-/* ==================================================
-   AKTİF MENÜ
-================================================== */
-
-.sidebar a.active {
-
-    background:
-        rgba(99,102,241,.18);
-
-    color:#fff;
-
-    border-left:
-        3px solid #6366f1;
-}
-
-
-/* ==================================================
-   BAŞLIKLAR
-================================================== */
-
-.section-title {
-    margin-bottom:25px;
-}
-
-.section-title h1 {
-    margin-bottom:8px;
-}
-
-.section-title p {
-    opacity:.7;
-}
-
-
-/* ==================================================
-   DASHBOARD
-================================================== */
-
-.dashboard-cards {
-
-    display:grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(200px,1fr)
-        );
-
-    gap:20px;
-
-    margin-top:30px;
-}
-
-.dashboard-card {
-
-    padding:25px;
-
-    border-radius:16px;
-}
-
-.dashboard-card h3 {
-    margin-bottom:10px;
-}
-
-.dashboard-card h1 {
-
-    font-size:36px;
-
-    margin:0;
-}
-
-
-/* ==================================================
-   KULLANICI KARTLARI
-================================================== */
-
-.user-list {
-
-    display:grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(260px,1fr)
-        );
-
-    gap:18px;
-
-    margin-top:25px;
-}
-
-.user-card {
-
-    padding:20px;
-
-    border-radius:16px;
-
-    border:
-        1px solid
-        rgba(99,102,241,.15);
-
-    background:
-        rgba(99,102,241,.04);
-
-    transition:.2s;
-}
-
-.user-card:hover {
-
-    transform:translateY(-3px);
-
-    box-shadow:
-        0 10px 25px
-        rgba(0,0,0,.08);
-}
-
-
-/* ==================================================
-   ADMIN KARTI
-================================================== */
-
-.user-card.admin-card {
-
-    border:
-        1px solid
-        rgba(245,158,11,.35);
-
-    background:
-        rgba(245,158,11,.08);
-}
-
-.user-role {
-
-    display:inline-block;
-
-    margin-top:10px;
-
-    padding:5px 10px;
-
-    border-radius:20px;
-
-    font-size:12px;
-
-    font-weight:700;
-}
-
-.user-role.admin {
-
-    background:
-        rgba(245,158,11,.15);
-
-    color:#f59e0b;
-}
-
-.user-role.user {
-
-    background:
-        rgba(99,102,241,.15);
-
-    color:#6366f1;
-}
-
-
-/* ==================================================
-   KULLANICI İŞLEMLERİ
-================================================== */
-
-.user-actions {
-
-    display:flex;
-
-    gap:8px;
-
-    flex-wrap:wrap;
-
-    margin-top:16px;
-}
-
-.user-edit-box {
-
-    display:none;
-
-    margin-top:18px;
-
-    padding:18px;
-
-    border-radius:14px;
-
-    background:
-        rgba(99,102,241,.05);
-
-    border:
-        1px solid
-        rgba(99,102,241,.15);
-}
-
-.user-edit-box.show {
-    display:block;
-}
-
-
-/* ==================================================
-   SİL BUTONU
-================================================== */
-
-.delete-button {
-
-    background:
-        rgba(239,68,68,.12);
-
-    color:#ef4444;
-
-    border:
-        1px solid
-        rgba(239,68,68,.25);
-
-    padding:10px 15px;
-
-    border-radius:10px;
-
-    cursor:pointer;
-
-    font-weight:600;
-}
-
-.delete-button:hover {
-
-    background:
-        rgba(239,68,68,.20);
-}
-
-
-/* ==================================================
-   TEMA
-================================================== */
-
-.theme-toggle {
-
-    position:fixed;
-
-    right:25px;
-    bottom:25px;
-
-    width:52px;
-    height:52px;
-
-    border-radius:50%;
-
-    border:none;
-
-    cursor:pointer;
-
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-
-    padding:0;
-    line-height:1;
-    text-align:center;
-
-    font-size:22px;
-
-    z-index:9999;
-
-    box-shadow:
-        0 8px 25px
-        rgba(0,0,0,.20);
-}
-
-
-/* ==================================================
-   DOSYA
-================================================== */
-
-.activity-file {
-
-    margin-top:20px;
-
-    padding:18px;
-
-    border:
-        1px solid
-        rgba(255,255,255,.10);
-
-    border-radius:12px;
-}
-
-.formatted-file-name {
-
-    display:inline-block;
-
-    margin-top:12px;
-
-    padding:10px 14px;
-
-    border-radius:10px;
-
-    background:
-        rgba(99,102,241,.10);
-
-    border:
-        1px solid
-        rgba(99,102,241,.20);
-
-    font-size:14px;
-
-    word-break:break-word;
-}
-
-.file-meta {
-
-    margin-top:10px;
-
-    font-size:13px;
-
-    opacity:.65;
-}
-
-
-/* ==================================================
-   SÜRESİ GEÇMİŞ
-================================================== */
-
-.status.expired {
-
-    background:
-        rgba(239,68,68,.15);
-
-    color:#ef4444;
-
-    border:
-        1px solid
-        rgba(239,68,68,.30);
-}
-
-.expired-warning {
-
-    margin-top:15px;
-
-    padding:12px 15px;
-
-    border-radius:10px;
-
-    background:
-        rgba(239,68,68,.08);
-
-    border:
-        1px solid
-        rgba(239,68,68,.20);
-
-    color:#ef4444;
-
-    font-weight:600;
-}
-
-
-/* ==================================================
-   GÖREV DÜZENLEME
-================================================== */
-
-.edit-task-box {
-
-    margin-top:20px;
-
-    padding:20px;
-
-    border-radius:15px;
-
-    background:
-        rgba(99,102,241,.05);
-
-    border:
-        1px solid
-        rgba(99,102,241,.15);
-
-    display:none;
-}
-
-.edit-task-box.show {
-    display:block;
-}
-
-.edit-task-box h3 {
-    margin-bottom:18px;
-}
-
-
-/* ==================================================
-   BUTONLAR
-================================================== */
-
-.task-actions {
-
-    display:flex;
-
-    gap:10px;
-
-    flex-wrap:wrap;
-
-    margin-top:20px;
-}
-
-.secondary-button {
-
-    background:
-        rgba(99,102,241,.12);
-
-    color:inherit;
-
-    border:
-        1px solid
-        rgba(99,102,241,.25);
-
-    padding:10px 16px;
-
-    border-radius:10px;
-
-    cursor:pointer;
-}
-
-.cancel-edit {
-
-    background:
-        rgba(239,68,68,.10);
-
-    color:#ef4444;
-
-    border:
-        1px solid
-        rgba(239,68,68,.20);
-
-    padding:10px 16px;
-
-    border-radius:10px;
-
-    cursor:pointer;
-}
-
-
-/* ==================================================
-   FORM
-================================================== */
-
-.form-grid {
-
-    display:grid;
-
-    grid-template-columns:
-        repeat(
-            auto-fit,
-            minmax(250px,1fr)
-        );
-
-    gap:20px;
-}
-
-.form-group {
-    margin-bottom:18px;
-}
-
-.form-group label {
-
-    display:block;
-
-    margin-bottom:8px;
-
-    font-weight:600;
-}
-
-
-
-
-/* ==================================================
-   FİLTRELEME
-================================================== */
-
-.filter-box {
-    margin: 0 0 25px 0;
-    padding: 18px;
-    border-radius: 16px;
-    background: rgba(99,102,241,.05);
-    border: 1px solid rgba(99,102,241,.14);
-}
-
-.filter-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 12px;
-    align-items: end;
-}
-
-.filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-
-.filter-group label {
-    font-size: 12px;
-    font-weight: 700;
-    opacity: .7;
-}
-
-.filter-group input,
-.filter-group select {
-    width: 100%;
-    box-sizing: border-box;
-}
-
-.filter-reset {
-    min-height: 44px;
-    padding: 10px 15px;
-    border-radius: 10px;
-    border: 1px solid rgba(239,68,68,.22);
-    background: rgba(239,68,68,.09);
-    color: #ef4444;
-    cursor: pointer;
-    font-weight: 600;
-}
-
-.filter-result-count {
-    margin-top: 12px;
-    font-size: 13px;
-    opacity: .6;
-}
-
-.filter-empty {
-    display: none;
-    margin-top: 15px;
-    padding: 18px;
-    text-align: center;
-    border-radius: 12px;
-    background: rgba(99,102,241,.05);
-    border: 1px dashed rgba(99,102,241,.20);
-    opacity: .75;
-}
-
-.filter-item.is-hidden {
-    display: none !important;
-}
-
-/* ==================================================
-   MOBİL
-================================================== */
-
-@media(max-width:700px) {
-
-    .task-actions,
-    .user-actions {
-
-        flex-direction:column;
-    }
-
-}
-
-</style>
 
 </head>
 
 
-<body>
+<body class="reference-admin-layout" data-initial-section="<?= htmlspecialchars($active_section, ENT_QUOTES, "UTF-8") ?>">
 
 
 <!-- ==================================================
@@ -2139,109 +2007,153 @@ $unread_count =
 
 <div class="sidebar">
 
-    <h2>
-        TODO APP
-    </h2>
+    <h2>TODO APP</h2>
 
+    <div class="sidebar-profile-summary">
+
+        <div class="sidebar-profile-avatar">
+
+            <?php if (!empty($profile_image_url)): ?>
+
+                <img
+                    src="<?= htmlspecialchars(
+                        $profile_image_url,
+                        ENT_QUOTES,
+                        "UTF-8"
+                    ) ?>"
+                    alt="Admin profil fotoğrafı"
+                >
+
+            <?php else: ?>
+
+                <span
+                    class="profile-placeholder"
+                    aria-hidden="true"
+                ></span>
+
+            <?php endif; ?>
+
+        </div>
+
+        <strong class="sidebar-profile-name">
+            <?= htmlspecialchars(
+                $_SESSION["full_name"] ?? "Admin",
+                ENT_QUOTES,
+                "UTF-8"
+            ) ?>
+        </strong>
+
+        <span class="sidebar-profile-role">Yönetici</span>
+
+    </div>
 
     <a
-        href="#dashboard"
-        class="menu-link active"
-        data-section="dashboard"
-    >
-        📊 Dashboard
-    </a>
-
-
-    <a
-        href="#raporlar"
+        href="#profil"
         class="menu-link"
-        data-section="raporlar"
+        data-section="profil"
     >
-        📊 Raporlar
+        👤 Profil
     </a>
 
+    <nav class="sidebar-navigation" aria-label="Yönetici menüsü">
 
-    <a
-        href="#kullanicilar"
-        class="menu-link"
-        data-section="kullanicilar"
-    >
-        👥 Kullanıcılar
-    </a>
+        <a
+            href="#dashboard"
+            class="menu-link active"
+            data-section="dashboard"
+        >
+            <span aria-hidden="true">📊</span>
+            Dashboard
+        </a>
 
+        <a
+            href="#raporlar"
+            class="menu-link"
+            data-section="raporlar"
+        >
+            <span aria-hidden="true">📊</span>
+            Raporlar
+        </a>
 
-    <a
-        href="#gorev-ata"
-        class="menu-link"
-        data-section="gorev-ata"
-    >
-        ➕ Görev Ata
-    </a>
+        <a
+            href="#kullanicilar"
+            class="menu-link"
+            data-section="kullanicilar"
+        >
+            <span aria-hidden="true">👥</span>
+            Kullanıcılar
+        </a>
 
+        <a
+            href="#gorev-ata"
+            class="menu-link"
+            data-section="gorev-ata"
+        >
+            <span aria-hidden="true">➕</span>
+            Görev Ata
+        </a>
 
-    <a
-        href="#gorevler"
-        class="menu-link"
-        data-section="gorevler"
-    >
-        📋 Görevler
-    </a>
+        <a
+            href="#gorevler"
+            class="menu-link"
+            data-section="gorevler"
+        >
+            <span aria-hidden="true">📋</span>
+            Görevler
+        </a>
 
+        <a
+            href="#calismalar"
+            class="menu-link"
+            data-section="calismalar"
+        >
+            <span aria-hidden="true">📤</span>
+            Görev Çalışmaları
+        </a>
 
-    <a
-        href="#calismalar"
-        class="menu-link"
-        data-section="calismalar"
-    >
-        📤 Görev Çalışmaları
-    </a>
+        <a
+            href="#kullanici-calismalari"
+            class="menu-link"
+            data-section="kullanici-calismalari"
+        >
+            <span aria-hidden="true">📝</span>
+            Kullanıcı Çalışmaları
+        </a>
 
+        <a
+            href="#bildirimler"
+            class="menu-link"
+            data-section="bildirimler"
+        >
+            <span aria-hidden="true">🔔</span>
+            Bildirimler
 
-    <a
-        href="#kullanici-calismalari"
-        class="menu-link"
-        data-section="kullanici-calismalari"
-    >
-        📝 Kullanıcı Çalışmaları
-    </a>
+            <?php if ($unread_count > 0): ?>
 
+                <span class="notification-count sidebar-notification-count">
+                    <?= (int) $unread_count ?>
+                </span>
 
-    <a
-        href="#bildirimler"
-        class="menu-link"
-        data-section="bildirimler"
-    >
+            <?php endif; ?>
 
-        🔔 Bildirimler
+        </a>
 
-        <?php if ($unread_count > 0): ?>
+        <a
+            href="giris_loglari.php"
+            class="sidebar-page-link"
+        >
+            <span aria-hidden="true">🧾</span>
+            Giriş Logları
+        </a>
 
-            <span
-                style="
-                    margin-left:5px;
-                    padding:3px 8px;
-                    border-radius:20px;
-                    font-size:12px;
-                    background:#ef4444;
-                    color:white;
-                "
-            >
-
-                <?= $unread_count ?>
-
-            </span>
-
-        <?php endif; ?>
-
-    </a>
-
+    </nav>
 
     <a
         href="../logout.php"
         class="logout"
     >
-        🚪 Çıkış Yap
+        <span aria-hidden="true">🚪</span>
+        Çıkış Yap
     </a>
 
 </div>
@@ -2271,6 +2183,10 @@ $unread_count =
         <h1>
             Admin Paneli
         </h1>
+ 
+
+
+
 
         <p>
 
@@ -2469,8 +2385,204 @@ $unread_count =
 
 
 <!-- ==================================================
-     RAPORLAR
+     PROFİL
 ================================================== -->
+
+<section
+    id="section-profil"
+    class="panel-section"
+>
+    <div class="section-title user-profile-page-heading">
+        <h1>Profilim</h1>
+        <p>Hesap bilgilerinizi ve profil fotoğrafınızı buradan yönetebilirsiniz.</p>
+    </div>
+
+    <div class="box user-profile-tab">
+        <div class="user-profile-tab-header">
+            <div class="user-profile-tab-avatar">
+                <?php if (!empty($profile_image_url)): ?>
+                    <img
+                        src="<?= htmlspecialchars($profile_image_url, ENT_QUOTES, "UTF-8") ?>"
+                        alt="Admin profil fotoğrafı"
+                    >
+                <?php else: ?>
+                    <span class="profile-placeholder" aria-hidden="true"></span>
+                <?php endif; ?>
+            </div>
+
+            <div class="user-profile-tab-identity">
+                <span class="user-profile-tab-eyebrow">HESAP BİLGİLERİ</span>
+                <h2><?= htmlspecialchars($_SESSION["full_name"] ?? "Admin", ENT_QUOTES, "UTF-8") ?></h2>
+                <span class="profile-role-badge">Yönetici</span>
+                <p>Kullanıcıları, görevleri, çalışmaları ve bildirimleri bu alandan yönetebilirsiniz.</p>
+            </div>
+        </div>
+
+        <?php if (!empty($profile_update_message)): ?>
+            <div class="success user-profile-tab-message">
+                <?= htmlspecialchars($profile_update_message, ENT_QUOTES, "UTF-8") ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($profile_error_message)): ?>
+            <div class="error user-profile-tab-message">
+                <?= nl2br(htmlspecialchars($profile_error_message, ENT_QUOTES, "UTF-8")) ?>
+            </div>
+        <?php endif; ?>
+
+        <div class="user-profile-tab-divider"></div>
+
+        <div class="user-profile-tab-actions">
+            <form method="POST" enctype="multipart/form-data" class="profile-upload-form profile-page-upload-form">
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="<?= htmlspecialchars($csrf_token, ENT_QUOTES, "UTF-8") ?>"
+                >
+                <input type="hidden" name="update_profile_image" value="1">
+
+                <div class="upload-field-heading">
+                    <span>Profil Fotoğrafı</span>
+                    <small>JPG, JPEG veya PNG · Maks. 5 MB</small>
+                </div>
+
+                <label
+                    for="adminProfileImageInput"
+                    class="upload-dropzone profile-upload-dropzone"
+                    data-upload-dropzone
+                >
+                    <span class="upload-dropzone-icon" aria-hidden="true">+</span>
+                    <span class="upload-dropzone-copy">
+                        <strong>Fotoğraf yüklemek için tıklayın veya sürükleyin</strong>
+                        <small>İzin verilen uzantılar: JPG, JPEG, PNG · En fazla 5 MB</small>
+                        <span
+                            class="upload-dropzone-selection"
+                            id="adminProfileFileName"
+                            data-upload-file-summary
+                            hidden
+                        >
+                            Henüz dosya seçilmedi
+                        </span>
+                    </span>
+                </label>
+
+                <input
+                    type="file"
+                    id="adminProfileImageInput"
+                    name="profile_image"
+                    accept=".jpg,.jpeg,.png"
+                    class="profile-file-input profile-page-file-input upload-input"
+                    data-upload-input
+                >
+
+                <button
+                    type="submit"
+                    id="adminProfileUploadSubmit"
+                    class="profile-action-button success profile-page-upload-submit"
+                    hidden
+                >
+                    Fotoğrafı Yükle
+                </button>
+            </form>
+
+            <?php if (!empty($profile_image)): ?>
+                <form
+                    method="POST"
+                    class="profile-delete-form profile-page-delete-form"
+                    onsubmit="return confirm('Profil fotoğrafını silmek istediğinize emin misiniz?');"
+                >
+                    <input
+                        type="hidden"
+                        name="csrf_token"
+                        value="<?= htmlspecialchars($csrf_token, ENT_QUOTES, "UTF-8") ?>"
+                    >
+                    <input type="hidden" name="delete_profile_image" value="1">
+                    <button
+                        type="submit"
+                        class="profile-action-button danger profile-page-delete-button"
+                    >
+                        🗑 Fotoğrafı Sil
+                    </button>
+                </form>
+            <?php endif; ?>
+        </div>
+
+        <a
+            href="#dashboard"
+            class="profile-back-link profile-page-back menu-link"
+            data-section="dashboard"
+        >
+            ← Dashboard'a Dön
+        </a>
+    </div>
+</section>
+
+<script>
+const adminProfileImageInput =
+    document.getElementById("adminProfileImageInput");
+const adminProfileUploadSubmit =
+    document.querySelector(".profile-page-upload-submit");
+const adminProfileFileName =
+    document.getElementById("adminProfileFileName");
+
+if (adminProfileImageInput && adminProfileUploadSubmit) {
+    adminProfileImageInput.addEventListener("change", function () {
+        const hasFile = this.files && this.files.length > 0;
+
+        adminProfileUploadSubmit.hidden = !hasFile;
+
+        if (adminProfileFileName) {
+            adminProfileFileName.textContent = hasFile
+                ? this.files[0].name
+                : "Henüz dosya seçilmedi";
+            adminProfileFileName.hidden = !hasFile;
+        }
+    });
+}
+
+const adminProfileDropzone = document.querySelector(
+    'label[data-upload-dropzone][for="adminProfileImageInput"]'
+);
+
+if (adminProfileImageInput && adminProfileDropzone) {
+    ["dragenter", "dragover"].forEach(function (eventName) {
+        adminProfileDropzone.addEventListener(eventName, function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            adminProfileDropzone.classList.add("is-dragover");
+        });
+    });
+
+    ["dragleave", "dragend"].forEach(function (eventName) {
+        adminProfileDropzone.addEventListener(eventName, function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            adminProfileDropzone.classList.remove("is-dragover");
+        });
+    });
+
+    adminProfileDropzone.addEventListener("drop", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        adminProfileDropzone.classList.remove("is-dragover");
+
+        const droppedFiles = event.dataTransfer && event.dataTransfer.files
+            ? Array.from(event.dataTransfer.files)
+            : [];
+
+        if (droppedFiles.length === 0) {
+            return;
+        }
+
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(droppedFiles[0]);
+        adminProfileImageInput.files = dataTransfer.files;
+        adminProfileImageInput.dispatchEvent(
+            new Event("change", { bubbles: true })
+        );
+    });
+}
+</script>
 
 <section
     id="section-raporlar"
@@ -3458,24 +3570,53 @@ $unread_count =
                 </div>
 
 
-                <p>
+                                <p>
 
                     <strong>
                         👤 Atanan Kullanıcı:
                     </strong>
 
                     <?= htmlspecialchars(
-                        $task["user_name"]
+                        $task["user_name"],
+                        ENT_QUOTES,
+                        "UTF-8"
                     ) ?>
 
                     <?php if (!empty($task["username"])): ?>
 
                         <span style="opacity:.6;">
-
                             (@<?= htmlspecialchars(
-                                $task["username"]
+                                $task["username"],
+                                ENT_QUOTES,
+                                "UTF-8"
                             ) ?>)
+                        </span>
 
+                    <?php endif; ?>
+
+                </p>
+
+
+                <p>
+
+                    <strong>
+                        🧑‍💼 Atayan:
+                    </strong>
+
+                    <?= htmlspecialchars(
+                        $task["assigned_by_name"] ?? "-",
+                        ENT_QUOTES,
+                        "UTF-8"
+                    ) ?>
+
+                    <?php if (!empty($task["assigned_by_username"])): ?>
+
+                        <span style="opacity:.6;">
+                            (@<?= htmlspecialchars(
+                                $task["assigned_by_username"],
+                                ENT_QUOTES,
+                                "UTF-8"
+                            ) ?>)
                         </span>
 
                     <?php endif; ?>
@@ -4383,77 +4524,80 @@ $unread_count =
     <?php else: ?>
 
 
-        <?php foreach (
-            $notifications
-            as $notification
-        ): ?>
-
-
+        <?php foreach ($notifications as $notification): ?>
             <div
                 class="box filter-item notification-filter-item"
                 data-notification-text="<?= htmlspecialchars(strtolower($notification["title"] . " " . $notification["message"]), ENT_QUOTES, "UTF-8") ?>"
                 data-notification-status="<?= (int) $notification["is_read"] === 0 ? "unread" : "read" ?>"
             >
-
-                <div
-                    style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        gap:15px;
-                    "
-                >
-
+                <div class="notification-header">
                     <h2>
-
                         <?= htmlspecialchars(
-                            $notification["title"]
+                            $notification["title"],
+                            ENT_QUOTES,
+                            "UTF-8"
                         ) ?>
-
                     </h2>
 
-
-                    <?php if (
-                        (int) $notification["is_read"] === 0
-                    ): ?>
-
-                        <span
-                            class="status incelemede"
-                        >
-
-                            Yeni
-
-                        </span>
-
+                    <?php if ((int) $notification["is_read"] === 0): ?>
+                        <span class="status incelemede">Yeni</span>
                     <?php endif; ?>
-
                 </div>
 
-
-                <div class="work">
-
+                <div class="notification-message">
                     <?= nl2br(
                         htmlspecialchars(
-                            $notification["message"]
+                            $notification["message"],
+                            ENT_QUOTES,
+                            "UTF-8"
                         )
                     ) ?>
-
                 </div>
 
-
-                <div class="date">
-
+                <div class="work-date">
                     📅
-
                     <?= htmlspecialchars(
-                        $notification["created_at"]
+                        $notification["created_at"],
+                        ENT_QUOTES,
+                        "UTF-8"
                     ) ?>
-
                 </div>
 
+                <div class="notification-card-actions">
+                    <form method="POST">
+                        <input
+                            type="hidden"
+                            name="csrf_token"
+                            value="<?= htmlspecialchars($csrf_token, ENT_QUOTES, "UTF-8") ?>"
+                        >
+                        <input
+                            type="hidden"
+                            name="notification_id"
+                            value="<?= (int) $notification["id"] ?>"
+                        >
+
+                        <?php if ((int) $notification["is_read"] === 0): ?>
+                            <button
+                                type="submit"
+                                name="notification_action"
+                                value="mark_read"
+                                class="notification-action-button notification-read-action"
+                            >
+                                ✓ Okundu Yap
+                            </button>
+                        <?php else: ?>
+                            <button
+                                type="submit"
+                                name="notification_action"
+                                value="mark_unread"
+                                class="notification-action-button notification-unread-action"
+                            >
+                                ↺ Okunmadı Yap
+                            </button>
+                        <?php endif; ?>
+                    </form>
+                </div>
             </div>
-
-
         <?php endforeach; ?>
 
 
@@ -4605,21 +4749,17 @@ document.addEventListener(
                 ""
             );
 
+        const initialSection =
+            document.body.dataset.initialSection || "dashboard";
 
-        if (hash) {
+        const requestedSection = hash || initialSection;
+        const sectionExists =
+            document.getElementById(
+                "section-" + requestedSection
+            );
 
-            const sectionExists =
-                document.getElementById(
-                    "section-" + hash
-                );
-
-
-            if (sectionExists) {
-
-                showSection(hash);
-
-            }
-
+        if (sectionExists) {
+            showSection(requestedSection);
         }
 
 

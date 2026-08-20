@@ -2341,7 +2341,7 @@ body.dark-mode .deadline-reminder-item {
     font-weight: 700;
 
     background:
-        #6366f1;
+        #5b3b9147;
 
     color: white;
 
@@ -2525,7 +2525,7 @@ body.dark-mode .deadline-reminder-item {
     font-weight: 700;
 
     background:
-        #6366f1;
+        #5b3b9147;
 
     color: white;
 
@@ -3264,14 +3264,14 @@ transition: 0.2s ease;
 .admin-profile-upload-button {
 display: inline-flex;
 align-items: center;
-background: #2563eb;
+background: #5b3b9147;
 color: #ffffff;
 
 
 }
 
 .admin-profile-upload-button:hover {
-background: #1d4ed8;
+background: #5b3b9147;
 }
 
 .admin-profile-upload-submit {
@@ -4333,7 +4333,7 @@ body.dark-mode .notification-card-actions {
     border: 2px dashed #a9c8f4;
     border-radius: 20px;
     background: linear-gradient(135deg, #e8f1ff 0%, #c7daf7 100%);
-    color: #3d75ca;
+    color: #5b3b9147;
     cursor: pointer;
     text-align: center;
     transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
@@ -4544,7 +4544,7 @@ body.dark-mode .upload-field-heading small {
 .upload-dropzone,
 .profile-upload-form .upload-dropzone,
 .profile-page-upload-form .upload-dropzone {
-    border-color: rgba(91, 59, 145, 0.28) !important;
+    border-color: #5b3b9147 !important;
     background: linear-gradient(135deg, var(--profile-lavender) 0%, var(--profile-lavender-strong) 100%) !important;
     color: var(--profile-purple) !important;
 }

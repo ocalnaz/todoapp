@@ -1,6 +1,6 @@
 <?php
 
-session_start();
+require_once __DIR__ . "/../config/session.php";
 
 require_once "../config/database.php";
 
@@ -28,6 +28,8 @@ if (
     echo "Bu sayfaya erişim yetkiniz yok.";
     exit;
 }
+
+$admin_id = (int) ($_SESSION["user_id"] ?? 0);
 
 
 // ==================================================
@@ -139,6 +141,13 @@ if (
 
             $error = "Geçersiz rol.";
 
+        } elseif (
+            $id === $admin_id
+            && $role !== "admin"
+        ) {
+
+            $error = "Kendi admin yetkinizi kaldıramazsınız.";
+
         } else {
 
             try {
@@ -217,60 +226,64 @@ if (
 
     } else {
 
-        $task_id =
-            (int) $_POST["delete_task_id"];
+        $task_id = filter_var(
+            $_POST["delete_task_id"],
+            FILTER_VALIDATE_INT,
+            ["options" => ["min_range" => 1]]
+        );
 
+        if ($task_id === false) {
 
-        try {
+            $error = "Geçersiz görev.";
 
-            $db->beginTransaction();
+        } else {
 
+            try {
 
-            // Önce göreve ait gönderimleri sil
+                // Önce görevin gerçekten bu kullanıcıya ait olduğunu doğrula.
+                $task_check = $db->prepare("
+                    SELECT id
+                    FROM tasks
+                    WHERE id = ?
+                      AND assigned_to = ?
+                    LIMIT 1
+                ");
+                $task_check->execute([$task_id, $id]);
 
-            $stmt = $db->prepare("
-                DELETE FROM task_submissions
-                WHERE task_id = ?
-            ");
+                if (!$task_check->fetch(PDO::FETCH_ASSOC)) {
 
+                    $error = "Bu görevi silme yetkiniz yok.";
 
-            $stmt->execute([
-                $task_id
-            ]);
+                } else {
 
+                    $db->beginTransaction();
 
-            // Görevi sil
+                    // Sahiplik doğrulandıktan sonra gönderimleri sil.
+                    $stmt = $db->prepare("
+                        DELETE FROM task_submissions
+                        WHERE task_id = ?
+                    ");
+                    $stmt->execute([$task_id]);
 
-            $stmt = $db->prepare("
-                DELETE FROM tasks
-                WHERE id = ?
-                AND assigned_to = ?
-            ");
+                    $stmt = $db->prepare("
+                        DELETE FROM tasks
+                        WHERE id = ?
+                          AND assigned_to = ?
+                    ");
+                    $stmt->execute([$task_id, $id]);
 
+                    $db->commit();
+                    $message = "Görev başarıyla silindi.";
+                }
 
-            $stmt->execute([
-                $task_id,
-                $id
-            ]);
+            } catch (PDOException $e) {
 
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
 
-            $db->commit();
-
-
-            $message =
-                "Görev başarıyla silindi.";
-
-
-        } catch (PDOException $e) {
-
-            if ($db->inTransaction()) {
-
-                $db->rollBack();
+                $error = "Görev silinirken hata oluştu.";
             }
-
-
-            $error =
-                "Görev silinirken bir hata oluştu.";
         }
     }
 }

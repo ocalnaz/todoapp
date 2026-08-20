@@ -1,12 +1,12 @@
 <?php
 
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
+require_once __DIR__ . "/config/session.php";
 
 require_once 'config/database.php';
 
-$recaptcha_secret = "6LeliI0tAAAAALA3miSCT9KnE0jdFTAJPn76g5Vp";
+$recaptcha_secret = trim(
+    (string) (getenv("TODOAPP_RECAPTCHA_SECRET") ?: "")
+);
 
 define('MAX_LOGIN_FAILURES', 3);
 define('LOGIN_LOCK_SECONDS', 15 * 60);
@@ -200,6 +200,11 @@ if (isset($_SESSION["user_id"])) {
     }
 }
 
+if (empty($_SESSION["login_csrf_token"])) {
+    $_SESSION["login_csrf_token"] = bin2hex(random_bytes(32));
+}
+
+$login_csrf_token = (string) $_SESSION["login_csrf_token"];
 $error = "";
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
@@ -207,12 +212,37 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $username = trim((string) ($_POST["username"] ?? ""));
     $password = (string) ($_POST["password"] ?? "");
     $recaptcha = (string) ($_POST["g-recaptcha-response"] ?? "");
+    $submitted_csrf = (string) ($_POST["csrf_token"] ?? "");
+
+    if (
+        !hash_equals($login_csrf_token, $submitted_csrf)
+    ) {
+        $error = "Geçersiz veya süresi dolmuş istek. Lütfen sayfayı yenileyip tekrar deneyin.";
+
+        log_login_event(
+            $db,
+            null,
+            $username !== "" ? $username : "[boş]",
+            "csrf_failed"
+        );
+    }
 
     // ==================================================
     // RECAPTCHA KONTROLÜ
     // ==================================================
 
-    if (empty($recaptcha)) {
+    if ($recaptcha_secret === "") {
+
+        $error = "Sunucu reCAPTCHA ayarı eksik. Lütfen yöneticinizle iletişime geçin.";
+
+        log_login_event(
+            $db,
+            null,
+            $username !== "" ? $username : "[boş]",
+            "recaptcha_config_missing"
+        );
+
+    } elseif (empty($recaptcha)) {
 
         $error = "Lütfen robot olmadığınızı doğrulayın.";
 
@@ -475,6 +505,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
 
         <form method="POST">
+
+            <input
+                type="hidden"
+                name="csrf_token"
+                value="<?= htmlspecialchars(
+                    $login_csrf_token,
+                    ENT_QUOTES,
+                    "UTF-8"
+                ) ?>"
+            >
 
             <label>Kullanıcı Adı</label>
 

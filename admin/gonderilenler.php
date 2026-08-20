@@ -1,6 +1,6 @@
 <?php
 
-session_start();
+require_once __DIR__ . "/../config/session.php";
 
 require_once "../config/database.php";
 
@@ -684,12 +684,8 @@ foreach ($submissions as &$submission) {
             );
 
             $submission["file_url"] =
-                "../"
-                . str_replace(
-                    DIRECTORY_SEPARATOR,
-                    "/",
-                    $relative_path
-                );
+                "../task_file.php?submission_id="
+                . (int) ($submission["id"] ?? 0);
         }
     }
 
@@ -737,12 +733,8 @@ foreach ($submissions as &$submission) {
                 );
 
                 $attachment_url =
-                    "../"
-                    . str_replace(
-                        DIRECTORY_SEPARATOR,
-                        "/",
-                        $attachment_relative
-                    );
+                    "../task_file.php?id="
+                    . (int) ($attachment_row["id"] ?? 0);
 
             }
 

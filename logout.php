@@ -1,8 +1,6 @@
 <?php
 
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
+require_once __DIR__ . "/config/session.php";
 
 require_once __DIR__ . "/config/database.php";
 
@@ -46,6 +44,24 @@ try {
 }
 
 session_unset();
+
+if (ini_get("session.use_cookies")) {
+    $cookie_params = session_get_cookie_params();
+
+    setcookie(
+        session_name(),
+        "",
+        [
+            "expires" => time() - 42000,
+            "path" => $cookie_params["path"] ?? "/",
+            "domain" => $cookie_params["domain"] ?? "",
+            "secure" => (bool) ($cookie_params["secure"] ?? false),
+            "httponly" => (bool) ($cookie_params["httponly"] ?? true),
+            "samesite" => $cookie_params["samesite"] ?? "Lax"
+        ]
+    );
+}
+
 session_destroy();
 
 header("Location: login.php");

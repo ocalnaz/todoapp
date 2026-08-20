@@ -1,6 +1,6 @@
 <?php
 
-session_start();
+require_once __DIR__ . "/../config/session.php";
 
 require_once "../config/database.php";
 
@@ -59,6 +59,39 @@ if (empty($_SESSION["csrf_token"])) {
 
 $csrf_token =
     $_SESSION["csrf_token"];
+
+function resolveUserProfileUploadFile(string $storedPath): string|false
+{
+    $normalized = str_replace("\\", "/", trim($storedPath));
+
+    while (strpos($normalized, "../") === 0) {
+        $normalized = substr($normalized, 3);
+    }
+
+    $normalized = ltrim($normalized, "/");
+
+    if (
+        $normalized === ""
+        || strpos($normalized, "..") !== false
+        || strpos($normalized, "uploads/profile_images/") !== 0
+    ) {
+        return false;
+    }
+
+    $root = realpath(__DIR__ . "/../uploads/profile_images");
+    $candidate = realpath(__DIR__ . "/../" . $normalized);
+
+    if (
+        $root === false
+        || $candidate === false
+        || !is_file($candidate)
+        || strpos($candidate, $root . DIRECTORY_SEPARATOR) !== 0
+    ) {
+        return false;
+    }
+
+    return $candidate;
+}
 
 
 // ============================================================
@@ -144,6 +177,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                 if (
                     $_FILES["profile_image"]["error"] !== UPLOAD_ERR_OK
+                    || !is_uploaded_file(
+                        (string) ($_FILES["profile_image"]["tmp_name"] ?? "")
+                    )
                 ) {
 
                     throw new Exception(
@@ -369,26 +405,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                 if (!empty($old_profile_image)) {
 
-                    $old_profile_file =
-                        dirname(__DIR__)
-                        . DIRECTORY_SEPARATOR
-                        . str_replace(
-                            "/",
-                            DIRECTORY_SEPARATOR,
-                            $old_profile_image
-                        );
+                    $old_profile_file = resolveUserProfileUploadFile(
+                        (string) $old_profile_image
+                    );
 
-
-                    if (
-                        is_file($old_profile_file)
-                    ) {
-
-                        @unlink(
-                            $old_profile_file
-                        );
-
+                    if ($old_profile_file !== false) {
+                        @unlink($old_profile_file);
                     }
-
                 }
 
 
@@ -453,25 +476,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 ]);
 
 
-                // Dosyayı fiziksel olarak sil
+                // Dosyayı yalnızca izin verilen profil klasörü içindeyse sil.
                 if (!empty($delete_profile_image)) {
 
-                    $delete_file =
-                        dirname(__DIR__)
-                        . DIRECTORY_SEPARATOR
-                        . str_replace(
-                            "/",
-                            DIRECTORY_SEPARATOR,
-                            $delete_profile_image
-                        );
+                    $delete_file = resolveUserProfileUploadFile(
+                        (string) $delete_profile_image
+                    );
 
-
-                    if (is_file($delete_file)) {
-
+                    if ($delete_file !== false) {
                         @unlink($delete_file);
-
                     }
-
                 }
 
 

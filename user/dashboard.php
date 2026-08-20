@@ -1,6 +1,6 @@
 <?php
 
-session_start();
+require_once __DIR__ . "/../config/session.php";
 
 require_once "../config/database.php";
 
@@ -73,6 +73,39 @@ if (
 
 $user_id =
     (int) $_SESSION["user_id"];
+
+function resolveTaskSubmissionUploadFile(string $storedPath): string|false
+{
+    $normalized = str_replace("\\", "/", trim($storedPath));
+
+    while (strpos($normalized, "../") === 0) {
+        $normalized = substr($normalized, 3);
+    }
+
+    $normalized = ltrim($normalized, "/");
+
+    if (
+        $normalized === ""
+        || strpos($normalized, "..") !== false
+        || strpos($normalized, "uploads/task_submissions/") !== 0
+    ) {
+        return false;
+    }
+
+    $root = realpath(__DIR__ . "/../uploads/task_submissions");
+    $candidate = realpath(__DIR__ . "/../" . $normalized);
+
+    if (
+        $root === false
+        || $candidate === false
+        || !is_file($candidate)
+        || strpos($candidate, $root . DIRECTORY_SEPARATOR) !== 0
+    ) {
+        return false;
+    }
+
+    return $candidate;
+}
 
 $user_name =
     $_SESSION["full_name"] ?? "Kullanıcı";
@@ -1209,22 +1242,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     foreach (
                         $uploaded_submission_files ?? [] as $stored_file
                     ) {
-
-                        $relative_path = str_replace(
-                            "/",
-                            DIRECTORY_SEPARATOR,
-                            ltrim(
-                                $stored_file["file_path"] ?? "",
-                                "/\\"
-                            )
+                        $absolute_path = resolveTaskSubmissionUploadFile(
+                            (string) ($stored_file["file_path"] ?? "")
                         );
 
-                        $absolute_path =
-                            dirname(__DIR__)
-                            . DIRECTORY_SEPARATOR
-                            . $relative_path;
-
-                        if (is_file($absolute_path)) {
+                        if ($absolute_path !== false) {
                             @unlink($absolute_path);
                         }
 
@@ -1238,22 +1260,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     foreach (
                         $uploaded_submission_files ?? [] as $stored_file
                     ) {
-
-                        $relative_path = str_replace(
-                            "/",
-                            DIRECTORY_SEPARATOR,
-                            ltrim(
-                                $stored_file["file_path"] ?? "",
-                                "/\\"
-                            )
+                        $absolute_path = resolveTaskSubmissionUploadFile(
+                            (string) ($stored_file["file_path"] ?? "")
                         );
 
-                        $absolute_path =
-                            dirname(__DIR__)
-                            . DIRECTORY_SEPARATOR
-                            . $relative_path;
-
-                        if (is_file($absolute_path)) {
+                        if ($absolute_path !== false) {
                             @unlink($absolute_path);
                         }
 
@@ -1497,6 +1508,27 @@ try {
             array_unique($submission_ids)
         );
 
+        $attachment_name_column = "original_name";
+
+        try {
+            $attachment_columns_stmt = $db->query(
+                "PRAGMA table_info(task_submission_files)"
+            );
+            $attachment_columns = $attachment_columns_stmt->fetchAll(
+                PDO::FETCH_COLUMN,
+                1
+            );
+
+            if (
+                !in_array("original_name", $attachment_columns, true)
+                && in_array("file_name", $attachment_columns, true)
+            ) {
+                $attachment_name_column = "file_name";
+            }
+        } catch (PDOException $e) {
+            $attachment_name_column = "original_name";
+        }
+
         if (!empty($submission_ids)) {
 
             try {
@@ -1507,7 +1539,9 @@ try {
                 );
 
                 $submission_files_stmt = $db->prepare(
-                    "SELECT submission_id, original_name, file_path "
+                    "SELECT id, submission_id, "
+                    . $attachment_name_column
+                    . " AS original_name, file_path "
                     . "FROM task_submission_files "
                     . "WHERE submission_id IN ("
                     . $file_placeholders
@@ -1579,19 +1613,8 @@ try {
                     ) {
 
                         $attachment_url =
-                            "../"
-                            . str_replace(
-                                DIRECTORY_SEPARATOR,
-                                "/",
-                                ltrim(
-                                    str_replace(
-                                        $submission_project_root,
-                                        "",
-                                        $attachment_candidate
-                                    ),
-                                    "/\\"
-                                )
-                            );
+                            "../task_file.php?id="
+                            . (int) ($attachment_row["id"] ?? 0);
 
                     }
 
@@ -1607,6 +1630,25 @@ try {
 
                 }
 
+            }
+
+            if (
+                empty($submission["attachments"])
+                && !empty($submission["file_path"])
+            ) {
+                $legacy_candidate = resolveTaskSubmissionUploadFile(
+                    (string) $submission["file_path"]
+                );
+
+                if ($legacy_candidate !== false) {
+                    $legacy_name = basename($legacy_candidate);
+                    $submission["legacy_attachment"] = [
+                        "name" => $submission["file_name"]
+                            ?: $legacy_name,
+                        "url" => "../task_file.php?submission_id="
+                            . (int) ($submission["id"] ?? 0)
+                    ];
+                }
             }
 
         }
@@ -1650,37 +1692,6 @@ try {
 
     $today =
         new DateTimeImmutable("today");
-
-
-    $notification_insert =
-        $db->prepare("
-            INSERT INTO notifications
-            (
-                user_id,
-                title,
-                message,
-                is_read,
-                created_at
-            )
-            VALUES
-            (
-                ?,
-                ?,
-                ?,
-                0,
-                CURRENT_TIMESTAMP
-            )
-        ");
-
-
-    $notification_check =
-        $db->prepare("
-            SELECT COUNT(*)
-            FROM notifications
-            WHERE user_id = ?
-              AND title = ?
-              AND message = ?
-        ");
 
 
     foreach ($tasks as $deadline_task) {
@@ -1855,29 +1866,6 @@ try {
 
         ];
 
-
-        $notification_check->execute([
-
-            $user_id,
-            $reminder_title,
-            $reminder_message
-
-        ]);
-
-
-        if (
-            (int) $notification_check->fetchColumn() === 0
-        ) {
-
-            $notification_insert->execute([
-
-                $user_id,
-                $reminder_title,
-                $reminder_message
-
-            ]);
-
-        }
 
     }
 
@@ -2112,7 +2100,7 @@ foreach ($task_submissions as $task_id => $submissions) {
 
 <link
     rel="stylesheet"
-    href="../css/style.css?v=upload-card-lavanta-20260819"
+    href="../assets/css/style.css?v=upload-card-lavanta-20260819"
 >
 
 
@@ -3279,11 +3267,11 @@ if (userProfileImageInput && userProfileUploadSubmit) {
 
                                             </div>
 
-                                        <?php elseif (!empty($submission["file_path"])): ?>
+                                        <?php elseif (!empty($submission["legacy_attachment"])): ?>
 
                                             <a
-                                                href="../<?= htmlspecialchars(
-                                                    $submission["file_path"],
+                                                href="<?= htmlspecialchars(
+                                                    $submission["legacy_attachment"]["url"],
                                                     ENT_QUOTES,
                                                     "UTF-8"
                                                 ) ?>"
@@ -3295,10 +3283,7 @@ if (userProfileImageInput && userProfileUploadSubmit) {
                                                 📎
 
                                                 <?= htmlspecialchars(
-                                                    $submission["file_name"]
-                                                        ?: basename(
-                                                            $submission["file_path"]
-                                                        ),
+                                                    $submission["legacy_attachment"]["name"],
                                                     ENT_QUOTES,
                                                     "UTF-8"
                                                 ) ?>

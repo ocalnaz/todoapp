@@ -55,7 +55,9 @@ try {
 
 } catch (PDOException $e) {
 
-    die("Veritabanı bağlantı hatası: " . $e->getMessage());
+    error_log("Todoapp database error: " . $e->getMessage());
+    http_response_code(500);
+    die("Veritabanı bağlantısı kurulamadı. Lütfen daha sonra tekrar deneyin.");
 
 }
 

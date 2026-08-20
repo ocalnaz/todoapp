@@ -1,6 +1,6 @@
 <?php
 
-session_start();
+require_once __DIR__ . "/../config/session.php";
 
 require_once "../config/database.php";
 
@@ -85,39 +85,72 @@ if (
 
     } else {
 
-        $delete_id = (int) $_POST["delete_id"];
+        $delete_id = filter_var(
+            $_POST["delete_id"],
+            FILTER_VALIDATE_INT,
+            ["options" => ["min_range" => 1]]
+        );
 
-        try {
+        if ($delete_id === false) {
 
-            // Önce göreve ait gönderimleri sil
-            $stmt = $db->prepare("
-                DELETE FROM task_submissions
-                WHERE task_id = ?
-            ");
+            $error = "Geçersiz görev.";
 
-            $stmt->execute([
-                $delete_id
-            ]);
+        } else {
 
+            try {
 
-            // Daha sonra görevi sil
-            $stmt = $db->prepare("
-                DELETE FROM tasks
-                WHERE id = ?
-            ");
+                // Görevin bu admin tarafından oluşturulduğunu önce doğrula.
+                $task_check = $db->prepare("
+                    SELECT id
+                    FROM tasks
+                    WHERE id = ?
+                      AND assigned_by = ?
+                    LIMIT 1
+                ");
+                $task_check->execute([
+                    $delete_id,
+                    (int) $_SESSION["user_id"]
+                ]);
 
-            $stmt->execute([
-                $delete_id
-            ]);
+                if (!$task_check->fetch(PDO::FETCH_ASSOC)) {
 
+                    $error = "Bu görevi silme yetkiniz yok.";
 
-            header("Location: gorevler.php");
-            exit;
+                } else {
 
-        } catch (PDOException $e) {
+                    $db->beginTransaction();
 
-            $error =
-                "Görev silinirken hata oluştu.";
+                    // Sahiplik doğrulandıktan sonra gönderimleri sil.
+                    $stmt = $db->prepare("
+                        DELETE FROM task_submissions
+                        WHERE task_id = ?
+                    ");
+                    $stmt->execute([$delete_id]);
+
+                    $stmt = $db->prepare("
+                        DELETE FROM tasks
+                        WHERE id = ?
+                          AND assigned_by = ?
+                    ");
+                    $stmt->execute([
+                        $delete_id,
+                        (int) $_SESSION["user_id"]
+                    ]);
+
+                    $db->commit();
+
+                    header("Location: gorevler.php");
+                    exit;
+                }
+
+            } catch (PDOException $e) {
+
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+
+                $error = "Görev silinirken hata oluştu.";
+            }
         }
     }
 }
@@ -151,25 +184,52 @@ if (
         $description =
             trim($_POST["description"] ?? "");
 
-        $assigned_to =
-            $_POST["assigned_to"] ?? "";
+        $assigned_to = filter_var(
+            $_POST["assigned_to"] ?? null,
+            FILTER_VALIDATE_INT,
+            ["options" => ["min_range" => 1]]
+        );
 
-        $due_date =
-            $_POST["due_date"] ?? "";
+        $due_date = trim(
+            (string) ($_POST["due_date"] ?? "")
+        );
 
+        $valid_due_date = $due_date === ""
+            || (
+                preg_match('/^\\d{4}-\\d{2}-\\d{2}$/D', $due_date)
+                && DateTime::createFromFormat("!Y-m-d", $due_date)
+                    ->format("Y-m-d") === $due_date
+            );
+
+        $assigned_user_stmt = $db->prepare("
+            SELECT id
+            FROM users
+            WHERE id = ?
+              AND role = 'user'
+            LIMIT 1
+        ");
 
         if (
-            empty($title)
-            || empty($description)
-            || empty($assigned_to)
+            $title === ""
+            || $description === ""
+            || $assigned_to === false
+            || !$valid_due_date
         ) {
 
             $error =
-                "Lütfen gerekli alanları doldurun.";
+                "Lütfen geçerli görev bilgilerini doldurun.";
 
         } else {
 
-            try {
+            $assigned_user_stmt->execute([$assigned_to]);
+
+            if (!$assigned_user_stmt->fetch(PDO::FETCH_ASSOC)) {
+
+                $error = "Yalnızca normal kullanıcıya görev atanabilir.";
+
+            } else {
+
+                try {
 
                 $stmt = $db->prepare("
                     INSERT INTO tasks
@@ -218,10 +278,11 @@ if (
                 header("Location: gorevler.php");
                 exit;
 
-            } catch (PDOException $e) {
+                } catch (PDOException $e) {
 
-                $error =
-                    "Görev oluşturulurken hata oluştu.";
+                    $error =
+                        "Görev oluşturulurken hata oluştu.";
+                }
             }
         }
     }

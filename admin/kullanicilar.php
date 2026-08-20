@@ -1,6 +1,6 @@
 <?php
 
-session_start();
+require_once __DIR__ . "/../config/session.php";
 
 require_once "../config/database.php";
 
@@ -25,6 +25,8 @@ if (!isset($_SESSION["role"]) || $_SESSION["role"] !== "admin") {
     echo "Bu sayfaya erişim yetkiniz yok.";
     exit;
 }
+
+$admin_id = (int) ($_SESSION["user_id"] ?? 0);
 
 
 // ==================================================
@@ -62,17 +64,39 @@ if (
 
     } else {
 
-        $delete_id = (int) $_POST["delete_id"];
+        $delete_id = filter_var(
+            $_POST["delete_id"],
+            FILTER_VALIDATE_INT,
+            ["options" => ["min_range" => 1]]
+        );
 
+        // Kendi hesabını veya başka bir admin hesabını silmesini engelle.
+        if ($delete_id === false) {
 
-        // Kendi hesabını silmesini engelle
-        if ($delete_id === (int) $_SESSION["user_id"]) {
+            $error = "Geçersiz kullanıcı.";
+
+        } elseif ($delete_id === $admin_id) {
 
             $error = "Kendi hesabınızı silemezsiniz.";
 
         } else {
 
-            try {
+            $target_stmt = $db->prepare("
+                SELECT id
+                FROM users
+                WHERE id = ?
+                  AND role = 'user'
+                LIMIT 1
+            ");
+            $target_stmt->execute([$delete_id]);
+
+            if (!$target_stmt->fetch(PDO::FETCH_ASSOC)) {
+
+                $error = "Bu kullanıcıyı silme yetkiniz yok.";
+
+            } else {
+
+                try {
 
                 $db->beginTransaction();
 
@@ -110,23 +134,21 @@ if (
                     WHERE id = ?
                 ");
 
-                $stmt->execute([$delete_id]);
+                    $stmt->execute([$delete_id]);
 
+                    $db->commit();
 
-                $db->commit();
+                    header("Location: kullanicilar.php");
+                    exit;
 
+                } catch (PDOException $e) {
 
-                header("Location: kullanicilar.php");
-                exit;
+                    if ($db->inTransaction()) {
+                        $db->rollBack();
+                    }
 
-
-            } catch (PDOException $e) {
-
-                if ($db->inTransaction()) {
-                    $db->rollBack();
+                    $error = "Kullanıcı silinirken hata oluştu.";
                 }
-
-                $error = "Kullanıcı silinirken hata oluştu.";
             }
         }
     }
@@ -160,12 +182,24 @@ if (
 
 
         if (
-            empty($full_name)
-            || empty($username)
-            || empty($password)
+            $full_name === ""
+            || $username === ""
+            || $password === ""
         ) {
 
             $error = "Tüm alanları doldurmalısınız.";
+
+        } elseif (
+            mb_strlen($full_name) > 120
+            || mb_strlen($username) > 80
+            || !preg_match('/^[A-Za-z0-9_.-]+$/', $username)
+        ) {
+
+            $error = "Ad, kullanıcı adı veya kullanıcı adı biçimi geçersiz.";
+
+        } elseif (strlen($password) < 8) {
+
+            $error = "Şifre en az 8 karakter olmalıdır.";
 
         } else {
 

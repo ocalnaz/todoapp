@@ -1,7 +1,7 @@
 <?php
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
+    require_once __DIR__ . "/../config/session.php";
 }
 
 require_once "../config/database.php";
@@ -32,6 +32,52 @@ if (
 
 
 $admin_id = (int) $_SESSION["user_id"];
+
+function resolveProfileUploadFile(string $storedPath): string|false
+{
+    $normalized = str_replace("\\", "/", trim($storedPath));
+
+    while (strpos($normalized, "../") === 0) {
+        $normalized = substr($normalized, 3);
+    }
+
+    $normalized = ltrim($normalized, "/");
+
+    if (
+        $normalized === ""
+        || strpos($normalized, "..") !== false
+        || strpos($normalized, "uploads/profile_images/") !== 0
+    ) {
+        return false;
+    }
+
+    $root = realpath(__DIR__ . "/../uploads/profile_images");
+    $candidate = realpath(__DIR__ . "/../" . $normalized);
+
+    if (
+        $root === false
+        || $candidate === false
+        || !is_file($candidate)
+        || strpos($candidate, $root . DIRECTORY_SEPARATOR) !== 0
+    ) {
+        return false;
+    }
+
+    return $candidate;
+}
+
+function isValidTaskDueDate(string $value): bool
+{
+    if ($value === "") {
+        return false;
+    }
+
+    $date = DateTime::createFromFormat("!Y-m-d", $value);
+
+    return $date instanceof DateTime
+        && $date->format("Y-m-d") === $value;
+}
+
 // ==================================================
 // ADMIN PROFİL FOTOĞRAFI
 // ==================================================
@@ -208,6 +254,9 @@ if (isset($_POST["update_profile_image"])) {
 
         if (
             $_FILES["profile_image"]["error"] !== UPLOAD_ERR_OK
+            || !is_uploaded_file(
+                (string) ($_FILES["profile_image"]["tmp_name"] ?? "")
+            )
         ) {
 
             throw new Exception(
@@ -380,24 +429,16 @@ if (isset($_POST["update_profile_image"])) {
             $admin_id
         ]);
 
-        // Eski fotoğrafı sil
+        // Eski fotoğrafı yalnızca izin verilen profil klasörü içindeyse sil.
         if (!empty($old_profile_image)) {
 
-            $old_profile_file =
-                dirname(__DIR__)
-                . DIRECTORY_SEPARATOR
-                . str_replace(
-                    "/",
-                    DIRECTORY_SEPARATOR,
-                    $old_profile_image
-                );
+            $old_profile_file = resolveProfileUploadFile(
+                (string) $old_profile_image
+            );
 
-            if (is_file($old_profile_file)) {
-
+            if ($old_profile_file !== false) {
                 @unlink($old_profile_file);
-
             }
-
         }
 
         $profile_image =
@@ -454,24 +495,16 @@ try {
     ]);
 
 
-    // Fiziksel dosyayı sil
+    // Fiziksel dosyayı yalnızca izin verilen profil klasörü içindeyse sil.
     if (!empty($delete_profile_image)) {
 
-        $delete_file =
-            dirname(__DIR__)
-            . DIRECTORY_SEPARATOR
-            . str_replace(
-                "/",
-                DIRECTORY_SEPARATOR,
-                $delete_profile_image
-            );
+        $delete_file = resolveProfileUploadFile(
+            (string) $delete_profile_image
+        );
 
-        if (is_file($delete_file)) {
-
+        if ($delete_file !== false) {
             @unlink($delete_file);
-
         }
-
     }
 
 
@@ -511,15 +544,24 @@ try {
 
 
             if (
-                empty($full_name) ||
-                empty($username) ||
-                empty($password)
+                $full_name === "" ||
+                $username === "" ||
+                $password === ""
             ) {
 
                 $error =
                     "Lütfen tüm kullanıcı alanlarını doldurun.";
 
-            } elseif (strlen($password) < 6) {
+            } elseif (
+                mb_strlen($full_name) > 120
+                || mb_strlen($username) > 80
+                || !preg_match('/^[A-Za-z0-9_.-]+$/', $username)
+            ) {
+
+                $error =
+                    "Ad, kullanıcı adı veya kullanıcı adı biçimi geçersiz.";
+
+            } elseif (strlen($password) < 8) {
 
                 $error =
                     "Şifre en az 6 karakter olmalıdır.";
@@ -623,6 +665,9 @@ try {
                     ["user", "admin"],
                     true
                 )
+                || mb_strlen($full_name) > 120
+                || mb_strlen($username) > 80
+                || !preg_match('/^[A-Za-z0-9_.-]+$/', $username)
             ) {
 
                 $error =
@@ -689,11 +734,11 @@ try {
                             if (!empty($new_password)) {
 
                                 if (
-                                    strlen($new_password) < 6
+                                    strlen($new_password) < 8
                                 ) {
 
                                     $error =
-                                        "Yeni şifre en az 6 karakter olmalıdır.";
+                                        "Yeni şifre en az 8 karakter olmalıdır.";
 
                                 } else {
 
@@ -806,6 +851,11 @@ try {
 
                         $error =
                             "Silinecek kullanıcı bulunamadı.";
+
+                    } elseif (($delete_user["role"] ?? "") !== "user") {
+
+                        $error =
+                            "Admin hesabı bu ekrandan silinemez.";
 
                     } else {
 
@@ -969,18 +1019,22 @@ try {
             $description =
                 trim($_POST["description"] ?? "");
 
-            $assigned_to =
-                (int) ($_POST["assigned_to"] ?? 0);
+            $assigned_to = filter_var(
+                $_POST["assigned_to"] ?? null,
+                FILTER_VALIDATE_INT,
+                ["options" => ["min_range" => 1]]
+            );
 
-            $due_date =
-                $_POST["due_date"] ?? "";
+            $due_date = trim(
+                (string) ($_POST["due_date"] ?? "")
+            );
 
 
             if (
-                empty($title) ||
-                empty($description) ||
-                empty($assigned_to) ||
-                empty($due_date)
+                $title === "" ||
+                $description === "" ||
+                $assigned_to === false ||
+                !isValidTaskDueDate($due_date)
             ) {
 
                 $error =
@@ -994,6 +1048,7 @@ try {
                         SELECT id, full_name
                         FROM users
                         WHERE id = ?
+                              AND role = 'user'
                     ");
 
                     $user_stmt->execute([
@@ -1086,19 +1141,25 @@ try {
             $description =
                 trim($_POST["edit_description"] ?? "");
 
-            $assigned_to =
-                (int) ($_POST["edit_assigned_to"] ?? 0);
+            $assigned_to = filter_var(
+                $_POST["edit_assigned_to"] ?? null,
+                FILTER_VALIDATE_INT,
+                ["options" => ["min_range" => 1]]
+            );
 
-            $due_date =
-                $_POST["edit_due_date"] ?? "";
+            $due_date = trim(
+                (string) ($_POST["edit_due_date"] ?? "")
+            );
 
 
             if (
-                empty($task_id) ||
-                empty($title) ||
-                empty($description) ||
-                empty($assigned_to) ||
-                empty($due_date)
+                $task_id < 1 ||
+                $title === "" ||
+                $description === "" ||
+                $assigned_to === false ||
+                mb_strlen($title) > 200 ||
+                mb_strlen($description) > 5000 ||
+                !isValidTaskDueDate($due_date)
             ) {
 
                 $error =
@@ -1140,6 +1201,7 @@ try {
                             SELECT id, full_name
                             FROM users
                             WHERE id = ?
+                              AND role = 'user'
                         ");
 
                         $user_stmt->execute([
@@ -1991,7 +2053,7 @@ if (
 
 <link
     rel="stylesheet"
-    href="../css/style.css?v=upload-card-lavanta-20260819"
+    href="../assets/css/style.css?v=upload-card-lavanta-20260819"
 >
 
 

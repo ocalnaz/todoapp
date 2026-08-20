@@ -1,0 +1,4 @@
+# Prevent direct HTTP access to legacy connection files and backup copies.
+<FilesMatch "^(database\.php|login - Kopya\.php|logout - Kopya\.php)$">
+    Require all denied
+</FilesMatch>

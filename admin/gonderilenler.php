@@ -176,6 +176,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         ON ts.task_id = t.id
                     WHERE ts.id = ?
                       AND t.assigned_by = ?
+                      AND t.deleted_at IS NULL
                 ");
 
                 $stmt->execute([
@@ -249,6 +250,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             UPDATE tasks
                             SET status = ?
                             WHERE id = ?
+                              AND deleted_at IS NULL
                         ");
 
                         $stmt->execute([
@@ -314,6 +316,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             UPDATE tasks
                             SET status = ?
                             WHERE id = ?
+                              AND deleted_at IS NULL
                         ");
 
                         $stmt->execute([
@@ -537,6 +540,7 @@ $stmt = $db->prepare("
         ON tasks.assigned_by = assigned_by_user.id
 
     WHERE tasks.assigned_by = :admin_id
+      AND tasks.deleted_at IS NULL
 
     ORDER BY task_submissions.id DESC
 ");
@@ -818,6 +822,20 @@ unset($submission);
     <a href="gorevler.php">
 
         📒 Görevler
+
+    </a>
+
+
+    <a href="arsiv.php">
+
+        🗃️ Görev Arşivi
+
+    </a>
+
+
+    <a href="raporlar.php">
+
+        📈 Rapor Dışa Aktar
 
     </a>
 

@@ -156,6 +156,24 @@ try {
         ON tasks(priority)
     ");
 
+    // Görev arşivi: silinen görevler fiziksel olarak kaldırılmaz.
+    if (!in_array("deleted_at", $task_columns, true)) {
+        $db->exec(
+            "ALTER TABLE tasks ADD COLUMN deleted_at TEXT NULL"
+        );
+    }
+
+    if (!in_array("deleted_by", $task_columns, true)) {
+        $db->exec(
+            "ALTER TABLE tasks ADD COLUMN deleted_by INTEGER NULL"
+        );
+    }
+
+    $db->exec("
+        CREATE INDEX IF NOT EXISTS idx_tasks_deleted_at
+        ON tasks(deleted_at)
+    ");
+
     // Gönderim dosyası sürümleme: mevcut kayıtların sürümü 1 kabul edilir.
     $submission_columns = $db->query(
         "PRAGMA table_info(task_submissions)"

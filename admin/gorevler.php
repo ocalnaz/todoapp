@@ -105,6 +105,7 @@ if (
                     FROM tasks
                     WHERE id = ?
                       AND assigned_by = ?
+                      AND deleted_at IS NULL
                     LIMIT 1
                 ");
                 $task_check->execute([
@@ -120,19 +121,17 @@ if (
 
                     $db->beginTransaction();
 
-                    // Sahiplik doğrulandıktan sonra gönderimleri sil.
+                    // Görev ve gönderimleri koruyarak geri dönüşüm kutusuna taşı.
                     $stmt = $db->prepare("
-                        DELETE FROM task_submissions
-                        WHERE task_id = ?
-                    ");
-                    $stmt->execute([$delete_id]);
-
-                    $stmt = $db->prepare("
-                        DELETE FROM tasks
+                        UPDATE tasks
+                        SET deleted_at = CURRENT_TIMESTAMP,
+                            deleted_by = ?
                         WHERE id = ?
                           AND assigned_by = ?
+                          AND deleted_at IS NULL
                     ");
                     $stmt->execute([
+                        (int) $_SESSION["user_id"],
                         $delete_id,
                         (int) $_SESSION["user_id"]
                     ]);
@@ -388,7 +387,7 @@ $sql = "
     INNER JOIN users
         ON tasks.assigned_to = users.id
 
-    WHERE 1 = 1
+    WHERE tasks.deleted_at IS NULL
 ";
 
 
@@ -654,6 +653,20 @@ $tasks =
     >
 
         📒 Görevler
+
+    </a>
+
+
+    <a href="arsiv.php">
+
+        🗃️ Görev Arşivi
+
+    </a>
+
+
+    <a href="raporlar.php">
+
+        📈 Rapor Dışa Aktar
 
     </a>
 

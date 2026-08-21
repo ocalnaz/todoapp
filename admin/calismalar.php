@@ -447,6 +447,16 @@ $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </a>
 
 
+    <a href="arsiv.php">
+        🗃️ Görev Arşivi
+    </a>
+
+
+    <a href="raporlar.php">
+        📈 Rapor Dışa Aktar
+    </a>
+
+
     <a href="gonderilenler.php">
         📤 Gönderilenler
     </a>

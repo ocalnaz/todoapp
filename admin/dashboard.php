@@ -1187,6 +1187,7 @@ try {
                         FROM tasks
                         WHERE id = ?
                         AND assigned_by = ?
+                        AND deleted_at IS NULL
                     ");
 
                     $task_stmt->execute([
@@ -1333,6 +1334,7 @@ try {
                         FROM tasks
                         WHERE id = ?
                         AND assigned_by = ?
+                        AND deleted_at IS NULL
                     ");
 
                     $task_stmt->execute([
@@ -1357,15 +1359,6 @@ try {
                          * Önce göreve ait çalışmalar
                          */
 
-                        $delete_submissions =
-                            $db->prepare("
-                                DELETE FROM task_submissions
-                                WHERE task_id = ?
-                            ");
-
-                        $delete_submissions->execute([
-                            $task_id
-                        ]);
 
 
                         /*
@@ -1399,12 +1392,16 @@ try {
 
                         $delete_task =
                             $db->prepare("
-                                DELETE FROM tasks
+                                UPDATE tasks
+                                SET deleted_at = CURRENT_TIMESTAMP,
+                                    deleted_by = ?
                                 WHERE id = ?
                                 AND assigned_by = ?
+                                AND deleted_at IS NULL
                             ");
 
                         $delete_task->execute([
+                            $admin_id,
                             $task_id,
                             $admin_id
                         ]);
@@ -1446,6 +1443,7 @@ try {
                     FROM tasks
                     WHERE id = ?
                     AND assigned_by = ?
+                    AND deleted_at IS NULL
                 ");
 
                 $check_stmt->execute([
@@ -1486,6 +1484,7 @@ try {
                         SET status = 'onaylandı'
                         WHERE id = ?
                         AND assigned_by = ?
+                        AND deleted_at IS NULL
                         AND status = 'incelemede'
                     ");
 
@@ -1551,6 +1550,7 @@ try {
                     FROM tasks
                     WHERE id = ?
                     AND assigned_by = ?
+                    AND deleted_at IS NULL
                 ");
 
                 $check_stmt->execute([
@@ -1591,6 +1591,7 @@ try {
                         SET status = 'revizyon'
                         WHERE id = ?
                         AND assigned_by = ?
+                        AND deleted_at IS NULL
                         AND status = 'incelemede'
                     ");
 
@@ -1710,6 +1711,7 @@ $stmt = $db->prepare("
         ON t.assigned_by = assigned_by_user.id
 
     WHERE t.assigned_by = ?
+      AND t.deleted_at IS NULL
 
     ORDER BY t.id DESC
 ");
@@ -1923,6 +1925,46 @@ $report_completion_rate =
         )
         : 0;
 
+$priority_chart_colors = [
+    "urgent" => "#b94d68",
+    "high" => "#d28a4a",
+    "normal" => "#8d6bb3",
+    "low" => "#6d9b7a"
+];
+
+$priority_chart_segments = [];
+$priority_chart_offset = 0.0;
+$priority_report_total = array_sum($report_priority);
+
+if ($priority_report_total > 0) {
+    foreach ($priority_chart_colors as $priority_key => $priority_color) {
+        $priority_count = (int) ($report_priority[$priority_key] ?? 0);
+        $priority_percentage = ($priority_count / $priority_report_total) * 100;
+        $priority_start = round($priority_chart_offset, 2);
+        $priority_chart_offset += $priority_percentage;
+        $priority_end = round($priority_chart_offset, 2);
+
+        if ($priority_count > 0) {
+            $priority_chart_segments[] =
+                $priority_color
+                . " "
+                . $priority_start
+                . "% "
+                . $priority_end
+                . "%";
+        }
+    }
+}
+
+$priority_chart_background = $priority_chart_segments !== []
+    ? "conic-gradient(" . implode(", ", $priority_chart_segments) . ")"
+    : "conic-gradient(#e6ddec 0 100%)";
+
+$priority_chart_background_attribute = htmlspecialchars(
+    $priority_chart_background,
+    ENT_QUOTES,
+    "UTF-8"
+);
 
 // ==================================================
 // GÖREV ÇALIŞMALARINI GETİR
@@ -1948,6 +1990,7 @@ $stmt = $db->prepare("
         ON ts.user_id = u.id
 
     WHERE t.assigned_by = ?
+      AND t.deleted_at IS NULL
 
     ORDER BY ts.created_at DESC
 ");
@@ -2165,6 +2208,14 @@ if (
         </a>
 
         <a
+            href="raporlar.php"
+            class="menu-link"
+        >
+            <span aria-hidden="true">📈</span>
+            Rapor Dışa Aktar
+        </a>
+
+        <a
             href="#kullanicilar"
             class="menu-link"
             data-section="kullanicilar"
@@ -2189,6 +2240,14 @@ if (
         >
             <span aria-hidden="true">📋</span>
             Görevler
+        </a>
+
+        <a
+            href="arsiv.php"
+            class="menu-link"
+        >
+            <span aria-hidden="true">🗃️</span>
+            Görev Arşivi
         </a>
 
         <a
@@ -2781,23 +2840,49 @@ if (adminProfileImageInput && adminProfileDropzone) {
 
         </div>
 
-        <div class="report-priority-grid">
-            <div class="report-priority-item priority-urgent">
-                <span>Acil</span>
-                <strong><?= (int) $report_priority["urgent"] ?></strong>
+        <div class="report-priority-layout">
+
+            <div
+                class="priority-donut-chart"
+                style="--priority-chart-background: <?= $priority_chart_background_attribute ?>;"
+                role="img"
+                aria-label="Öncelik dağılımı: Acil <?= (int) $report_priority["urgent"] ?>, Yüksek <?= (int) $report_priority["high"] ?>, Normal <?= (int) $report_priority["normal"] ?>, Düşük <?= (int) $report_priority["low"] ?>. Toplam <?= (int) $priority_report_total ?> görev."
+            >
+                <div class="priority-donut-center">
+                    <strong><?= (int) $priority_report_total ?></strong>
+                    <span>Toplam görev</span>
+                </div>
             </div>
-            <div class="report-priority-item priority-high">
-                <span>Yüksek</span>
-                <strong><?= (int) $report_priority["high"] ?></strong>
+
+            <div class="report-priority-grid">
+                <?php
+                $priority_report_items = [
+                    "urgent" => "Acil",
+                    "high" => "Yüksek",
+                    "normal" => "Normal",
+                    "low" => "Düşük"
+                ];
+                ?>
+
+                <?php foreach ($priority_report_items as $priority_key => $priority_label): ?>
+                    <?php
+                    $priority_count = (int) ($report_priority[$priority_key] ?? 0);
+                    $priority_percentage = $priority_report_total > 0
+                        ? round(($priority_count / $priority_report_total) * 100)
+                        : 0;
+                    ?>
+
+                    <div class="report-priority-item priority-<?= htmlspecialchars($priority_key, ENT_QUOTES, "UTF-8") ?>">
+                        <span class="report-priority-label">
+                            <i class="report-priority-swatch" aria-hidden="true"></i>
+                            <?= htmlspecialchars($priority_label, ENT_QUOTES, "UTF-8") ?>
+                        </span>
+                        <strong><?= $priority_count ?></strong>
+                        <small>%<?= $priority_percentage ?></small>
+                    </div>
+                <?php endforeach; ?>
             </div>
-            <div class="report-priority-item priority-normal">
-                <span>Normal</span>
-                <strong><?= (int) $report_priority["normal"] ?></strong>
-            </div>
-            <div class="report-priority-item priority-low">
-                <span>Düşük</span>
-                <strong><?= (int) $report_priority["low"] ?></strong>
-            </div>
+
         </div>
 
     </div>
@@ -4894,10 +4979,16 @@ document.addEventListener(
                     "click",
                     function (event) {
 
-                        event.preventDefault();
-
                         const sectionName =
                             this.dataset.section;
+
+                        // data-section olmayan arşiv/rapor gibi
+                        // sayfa bağlantıları normal şekilde açılsın.
+                        if (!sectionName) {
+                            return;
+                        }
+
+                        event.preventDefault();
 
                         showSection(
                             sectionName

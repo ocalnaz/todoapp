@@ -765,6 +765,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             FROM tasks
                             WHERE id = ?
                               AND assigned_to = ?
+                              AND deleted_at IS NULL
                             LIMIT 1
                         ");
 
@@ -1420,6 +1421,7 @@ try {
             LEFT JOIN users assigned_admin
                 ON tasks.assigned_by = assigned_admin.id
             WHERE tasks.assigned_to = ?
+              AND tasks.deleted_at IS NULL
             ORDER BY
                 CASE
                     WHEN tasks.status = 'bekliyor' THEN 0

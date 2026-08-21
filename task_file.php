@@ -124,6 +124,7 @@ if ($attachment_id !== false && $attachment_id !== null) {
          INNER JOIN tasks
              ON task_submissions.task_id = tasks.id
          WHERE task_submission_files.id = ?
+           AND tasks.deleted_at IS NULL
            AND (
                 (? = 'admin' AND tasks.assigned_by = ?)
                 OR (? = 'user' AND task_submissions.user_id = ?)
@@ -149,6 +150,7 @@ if ($attachment_id !== false && $attachment_id !== null) {
          INNER JOIN tasks
              ON task_submissions.task_id = tasks.id
          WHERE task_submissions.id = ?
+           AND tasks.deleted_at IS NULL
            AND (
                 (? = 'admin' AND tasks.assigned_by = ?)
                 OR (? = 'user' AND task_submissions.user_id = ?)

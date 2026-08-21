@@ -44,8 +44,10 @@ try {
          FROM tasks
          INNER JOIN users
              ON users.id = tasks.assigned_to
-         WHERE tasks.due_date IS NOT NULL
+                  WHERE tasks.due_date IS NOT NULL
            AND TRIM(tasks.due_date) <> ''
+           AND tasks.deleted_at IS NULL
+
          ORDER BY tasks.due_date ASC"
     );
     $task_stmt->execute();

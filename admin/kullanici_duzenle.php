@@ -246,6 +246,7 @@ if (
                     FROM tasks
                     WHERE id = ?
                       AND assigned_to = ?
+                      AND deleted_at IS NULL
                     LIMIT 1
                 ");
                 $task_check->execute([$task_id, $id]);
@@ -258,22 +259,23 @@ if (
 
                     $db->beginTransaction();
 
-                    // Sahiplik doğrulandıktan sonra gönderimleri sil.
+                    // Gönderimleri koruyarak görevi geri dönüşüm kutusuna taşı.
                     $stmt = $db->prepare("
-                        DELETE FROM task_submissions
-                        WHERE task_id = ?
-                    ");
-                    $stmt->execute([$task_id]);
-
-                    $stmt = $db->prepare("
-                        DELETE FROM tasks
+                        UPDATE tasks
+                        SET deleted_at = CURRENT_TIMESTAMP,
+                            deleted_by = ?
                         WHERE id = ?
                           AND assigned_to = ?
+                          AND deleted_at IS NULL
                     ");
-                    $stmt->execute([$task_id, $id]);
+                    $stmt->execute([
+                        (int) $_SESSION["user_id"],
+                        $task_id,
+                        $id
+                    ]);
 
                     $db->commit();
-                    $message = "Görev başarıyla silindi.";
+                    $message = "Görev geri dönüşüm kutusuna taşındı.";
                 }
 
             } catch (PDOException $e) {
@@ -303,6 +305,7 @@ $stmt = $db->prepare("
         created_at
     FROM tasks
     WHERE assigned_to = ?
+      AND deleted_at IS NULL
     ORDER BY id DESC
 ");
 

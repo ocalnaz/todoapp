@@ -248,6 +248,22 @@ $login_logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 
         <a
+            href="arsiv.php"
+            class="sidebar-page-link"
+        >
+            <span aria-hidden="true">🗃️</span>
+            Görev Arşivi
+        </a>
+
+        <a
+            href="raporlar.php"
+            class="sidebar-page-link"
+        >
+            <span aria-hidden="true">📈</span>
+            Rapor Dışa Aktar
+        </a>
+
+        <a
             href="dashboard.php#calismalar"
             class="sidebar-page-link"
         >

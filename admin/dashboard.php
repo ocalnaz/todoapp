@@ -1029,12 +1029,16 @@ try {
                 (string) ($_POST["due_date"] ?? "")
             );
 
+            $priority = $_POST["priority"] ?? "normal";
+            $valid_priorities = ["low", "normal", "high", "urgent"];
+
 
             if (
                 $title === "" ||
                 $description === "" ||
                 $assigned_to === false ||
-                !isValidTaskDueDate($due_date)
+                !isValidTaskDueDate($due_date) ||
+                !in_array($priority, $valid_priorities, true)
             ) {
 
                 $error =
@@ -1077,9 +1081,10 @@ try {
                                 assigned_by,
                                 due_date,
                                 status,
+                                priority,
                                 created_at
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                         ");
 
                         $stmt->execute([
@@ -1088,7 +1093,8 @@ try {
                             $assigned_to,
                             $admin_id,
                             $due_date,
-                            "bekliyor"
+                            "bekliyor",
+                            $priority
                         ]);
 
 
@@ -1151,6 +1157,9 @@ try {
                 (string) ($_POST["edit_due_date"] ?? "")
             );
 
+            $priority = $_POST["edit_priority"] ?? "normal";
+            $valid_priorities = ["low", "normal", "high", "urgent"];
+
 
             if (
                 $task_id < 1 ||
@@ -1159,7 +1168,8 @@ try {
                 $assigned_to === false ||
                 mb_strlen($title) > 200 ||
                 mb_strlen($description) > 5000 ||
-                !isValidTaskDueDate($due_date)
+                !isValidTaskDueDate($due_date) ||
+                !in_array($priority, $valid_priorities, true)
             ) {
 
                 $error =
@@ -1227,7 +1237,8 @@ try {
                                     title = ?,
                                     description = ?,
                                     assigned_to = ?,
-                                    due_date = ?
+                                    due_date = ?,
+                                    priority = ?
                                 WHERE id = ?
                                 AND assigned_by = ?
                             ");
@@ -1237,6 +1248,7 @@ try {
                                 $description,
                                 $assigned_to,
                                 $due_date,
+                                $priority,
                                 $task_id,
                                 $admin_id
                             ]);
@@ -1683,6 +1695,7 @@ $stmt = $db->prepare("
         t.assigned_to,
         t.due_date,
         t.status,
+        t.priority,
         t.created_at,
         u.full_name AS user_name,
         u.username AS username,
@@ -1829,6 +1842,12 @@ $report_review = 0;
 $report_revision = 0;
 $report_approved = 0;
 $report_expired = 0;
+$report_priority = [
+    "urgent" => 0,
+    "high" => 0,
+    "normal" => 0,
+    "low" => 0
+];
 
 $user_task_stats = [];
 
@@ -1855,6 +1874,13 @@ foreach ($tasks as $task) {
 
     if (!empty($task["is_expired"])) {
         $report_expired++;
+    }
+
+    $taskPriority = $task["priority"] ?? "normal";
+    if (array_key_exists($taskPriority, $report_priority)) {
+        $report_priority[$taskPriority]++;
+    } else {
+        $report_priority["normal"]++;
     }
 
     $userId = (int) $task["assigned_to"];
@@ -1910,6 +1936,7 @@ $stmt = $db->prepare("
         ts.created_at,
         ts.status,
         ts.user_id,
+        ts.version_no,
         t.title AS task_title,
         u.full_name AS user_name
     FROM task_submissions ts
@@ -2740,6 +2767,42 @@ if (adminProfileImageInput && adminProfileDropzone) {
 
     <!-- DEADLINE RAPORU -->
 
+    <div class="box report-priority-box">
+
+        <div class="section-title">
+
+            <h2>
+                ⚡ Öncelik Dağılımı
+            </h2>
+
+            <p>
+                Görevlerin öncelik seviyelerine göre dağılımı.
+            </p>
+
+        </div>
+
+        <div class="report-priority-grid">
+            <div class="report-priority-item priority-urgent">
+                <span>Acil</span>
+                <strong><?= (int) $report_priority["urgent"] ?></strong>
+            </div>
+            <div class="report-priority-item priority-high">
+                <span>Yüksek</span>
+                <strong><?= (int) $report_priority["high"] ?></strong>
+            </div>
+            <div class="report-priority-item priority-normal">
+                <span>Normal</span>
+                <strong><?= (int) $report_priority["normal"] ?></strong>
+            </div>
+            <div class="report-priority-item priority-low">
+                <span>Düşük</span>
+                <strong><?= (int) $report_priority["low"] ?></strong>
+            </div>
+        </div>
+
+    </div>
+
+
     <div class="box">
 
         <div class="section-title">
@@ -3498,6 +3561,16 @@ if (adminProfileImageInput && adminProfileDropzone) {
 
             </div>
 
+            <div class="form-group">
+                <label for="taskPriority">Öncelik</label>
+                <select id="taskPriority" name="priority" required>
+                    <option value="low">Düşük</option>
+                    <option value="normal" selected>Normal</option>
+                    <option value="high">Yüksek</option>
+                    <option value="urgent">Acil</option>
+                </select>
+            </div>
+
 
             <button
                 type="submit"
@@ -3568,12 +3641,23 @@ if (adminProfileImageInput && adminProfileDropzone) {
                     <option value="expired">Süresi Doldu</option>
                 </select>
             </div>
+            <div class="filter-group">
+                <label for="taskPriorityFilter">⚡ Öncelik</label>
+                <select id="taskPriorityFilter">
+                    <option value="all">Tüm Öncelikler</option>
+                    <option value="urgent">Acil</option>
+                    <option value="high">Yüksek</option>
+                    <option value="normal">Normal</option>
+                    <option value="low">Düşük</option>
+                </select>
+            </div>
             <button type="button" class="filter-reset" id="resetTaskFilter">↺ Filtreleri Temizle</button>
         </div>
         <div class="filter-result-count" id="taskFilterCount"></div>
     </div>
 
     <div class="filter-empty" id="taskFilterEmpty">🔎 Filtrelere uygun görev bulunamadı.</div>
+    <div class="pagination" id="taskPagination" aria-label="Görev sayfaları"></div>
 
     <?php if (empty($tasks)): ?>
 
@@ -3599,8 +3683,16 @@ if (adminProfileImageInput && adminProfileDropzone) {
                 data-task-title="<?= htmlspecialchars(strtolower($task["title"] . " " . $task["description"]), ENT_QUOTES, "UTF-8") ?>"
                 data-task-user="<?= (int) $task["assigned_to"] ?>"
                 data-task-status="<?= !empty($task["is_expired"]) ? "expired" : htmlspecialchars($task["status"], ENT_QUOTES, "UTF-8") ?>"
+                data-task-priority="<?= htmlspecialchars($task["priority"] ?? "normal", ENT_QUOTES, "UTF-8") ?>"
             >
 
+                <?php
+                $priority_labels = ["low" => "Düşük", "normal" => "Normal", "high" => "Yüksek", "urgent" => "Acil"];
+                $task_priority = $task["priority"] ?? "normal";
+                ?>
+                <span class="priority-badge priority-<?= htmlspecialchars($task_priority, ENT_QUOTES, "UTF-8") ?>">
+                    <?= htmlspecialchars($priority_labels[$task_priority] ?? "Normal", ENT_QUOTES, "UTF-8") ?>
+                </span>
 
                 <h2>
 
@@ -4053,6 +4145,15 @@ if (adminProfileImageInput && adminProfileDropzone) {
                         </div>
 
 
+                        <div class="form-group">
+                            <label for="editTaskPriority<?= (int) $task["id"] ?>">Öncelik</label>
+                            <select id="editTaskPriority<?= (int) $task["id"] ?>" name="edit_priority" required>
+                                <?php foreach (["low" => "Düşük", "normal" => "Normal", "high" => "Yüksek", "urgent" => "Acil"] as $priority_value => $priority_label): ?>
+                                    <option value="<?= $priority_value ?>" <?= ($task["priority"] ?? "normal") === $priority_value ? "selected" : "" ?>><?= $priority_label ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
                         <div class="task-actions">
 
                             <button
@@ -4190,6 +4291,10 @@ if (adminProfileImageInput && adminProfileDropzone) {
                     <?= htmlspecialchars(
                         $submission["task_title"]
                     ) ?>
+
+                    <span class="submission-version-badge">
+                        v<?= max(1, (int) ($submission["version_no"] ?? 1)) ?>
+                    </span>
 
                 </h2>
 
@@ -5152,44 +5257,53 @@ document.addEventListener("DOMContentLoaded", function () {
         const count = config.countId ? document.getElementById(config.countId) : null;
         const empty = config.emptyId ? document.getElementById(config.emptyId) : null;
 
-        function apply() {
+        let currentPage = 1;
+        const pageSize = Number(config.pageSize || 6);
+        const pagination = config.paginationId ? document.getElementById(config.paginationId) : null;
+        function apply(resetPage = false) {
+            if (resetPage) currentPage = 1;
             const query = search ? search.value.trim().toLocaleLowerCase("tr-TR") : "";
-            let visible = 0;
-
+            const matched = [];
             items.forEach(function (item) {
                 let show = true;
-
-                if (query && !String(item.dataset[config.searchData] || "").toLocaleLowerCase("tr-TR").includes(query)) {
-                    show = false;
-                }
-
+                if (query && !String(item.dataset[config.searchData] || "").toLocaleLowerCase("tr-TR").includes(query)) show = false;
                 (config.selectData || []).forEach(function (dataKey, index) {
                     const selected = selects[index] ? selects[index].value : "all";
-                    if (selected !== "all" && String(item.dataset[dataKey] || "") !== selected) {
-                        show = false;
-                    }
+                    if (selected !== "all" && String(item.dataset[dataKey] || "") !== selected) show = false;
                 });
-
+                if (show) matched.push(item);
                 item.classList.toggle("is-hidden", !show);
-                if (show) visible++;
             });
-
-            if (count) {
-                count.textContent = visible + " sonuç gösteriliyor";
+            const pageCount = pagination ? Math.max(1, Math.ceil(matched.length / pageSize)) : 1;
+            if (currentPage > pageCount) currentPage = pageCount;
+            if (pagination) {
+                const pageStart = (currentPage - 1) * pageSize;
+                matched.forEach(function (item, index) {
+                    item.classList.toggle("is-hidden", index < pageStart || index >= pageStart + pageSize);
+                });
+                pagination.innerHTML = "";
+                if (pageCount > 1) {
+                    for (let page = 1; page <= pageCount; page++) {
+                        const button = document.createElement("button");
+                        button.type = "button";
+                        button.className = "pagination-button" + (page === currentPage ? " is-active" : "");
+                        button.textContent = String(page);
+                        button.setAttribute("aria-label", "Sayfa " + page);
+                        button.addEventListener("click", function () { currentPage = page; apply(false); });
+                        pagination.appendChild(button);
+                    }
+                }
             }
-            if (empty) {
-                empty.style.display = visible === 0 ? "block" : "none";
-            }
+            if (count) count.textContent = matched.length + " sonuç gösteriliyor";
+            if (empty) empty.style.display = matched.length === 0 ? "block" : "none";
         }
-
-        if (search) search.addEventListener("input", apply);
-        selects.forEach(select => select.addEventListener("change", apply));
-
+        if (search) search.addEventListener("input", () => apply(true));
+        selects.forEach(select => select.addEventListener("change", () => apply(true)));
         if (reset) {
             reset.addEventListener("click", function () {
                 if (search) search.value = "";
                 selects.forEach(select => select.value = "all");
-                apply();
+                apply(true);
             });
         }
 
@@ -5209,12 +5323,14 @@ document.addEventListener("DOMContentLoaded", function () {
     setupFilter({
         itemSelector: ".task-filter-item",
         searchId: "taskSearch",
-        selectIds: ["taskUserFilter", "taskStatusFilter"],
+        selectIds: ["taskUserFilter", "taskStatusFilter", "taskPriorityFilter"],
         searchData: "taskTitle",
-        selectData: ["taskUser", "taskStatus"],
+        selectData: ["taskUser", "taskStatus", "taskPriority"],
         resetId: "resetTaskFilter",
         countId: "taskFilterCount",
-        emptyId: "taskFilterEmpty"
+        emptyId: "taskFilterEmpty",
+        paginationId: "taskPagination",
+        pageSize: 6
     });
 
     setupFilter({

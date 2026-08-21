@@ -10,6 +10,46 @@ $recaptcha_secret = trim(
 
 define('MAX_LOGIN_FAILURES', 3);
 define('LOGIN_LOCK_SECONDS', 15 * 60);
+define('MAX_LOGIN_LOCK_LEVEL', 3);
+
+const LOGIN_LOCK_LEVEL_SECONDS = [
+    15 * 60,
+    30 * 60,
+    60 * 60
+];
+
+/**
+ * İstekten güvenilir biçimde istemci IP adresini alır.
+ * X-Forwarded-For gibi kullanıcı tarafından taklit edilebilen başlıklar
+ * kullanılmaz; doğrudan sunucunun REMOTE_ADDR değeri esas alınır.
+ */
+function get_client_ip_address(): string
+{
+    $remote_address = trim(
+        (string) ($_SERVER['REMOTE_ADDR'] ?? '')
+    );
+
+    return filter_var(
+        $remote_address,
+        FILTER_VALIDATE_IP
+    ) ? substr($remote_address, 0, 45) : '';
+}
+
+/**
+ * Kilit süresini kullanıcıya okunabilir biçimde gösterir.
+ */
+function format_lock_duration(int $seconds): string
+{
+    $seconds = max(0, $seconds);
+    $minutes = intdiv($seconds, 60);
+    $remaining_seconds = $seconds % 60;
+
+    if ($minutes > 0) {
+        return $minutes . ' dakika ' . $remaining_seconds . ' saniye';
+    }
+
+    return $remaining_seconds . ' saniye';
+}
 
 /**
  * Giriş olaylarını SQLite üzerindeki login_logs tablosuna kaydeder.
@@ -20,11 +60,7 @@ function log_login_event(
     string $username,
     string $event_type
 ): void {
-    $ip_address = substr(
-        (string) ($_SERVER['REMOTE_ADDR'] ?? ''),
-        0,
-        45
-    );
+    $ip_address = get_client_ip_address();
 
     $user_agent = substr(
         (string) ($_SERVER['HTTP_USER_AGENT'] ?? ''),
@@ -57,20 +93,31 @@ function log_login_event(
 /**
  * Kullanıcı adının başarısız giriş/kilit kaydını getirir.
  */
-function get_login_attempt(PDO $db, string $username): ?array {
+function get_login_attempt(
+    PDO $db,
+    string $username,
+    string $ip_address
+): ?array {
     $stmt = $db->prepare("
         SELECT
             username,
+            ip_address,
             failed_attempts,
             first_failed_at,
             last_failed_at,
-            locked_until
+            locked_until,
+            lock_level,
+            last_lock_seconds
         FROM login_attempts
         WHERE username = ?
+          AND ip_address = ?
         LIMIT 1
     ");
 
-    $stmt->execute([$username]);
+    $stmt->execute([
+        $username,
+        $ip_address
+    ]);
     $attempt = $stmt->fetch(PDO::FETCH_ASSOC);
 
     return $attempt ?: null;
@@ -79,12 +126,20 @@ function get_login_attempt(PDO $db, string $username): ?array {
 /**
  * Başarılı girişten veya süresi dolmuş kilitten sonra sayacı temizler.
  */
-function clear_login_attempt(PDO $db, string $username): void {
+function clear_login_attempt(
+    PDO $db,
+    string $username,
+    string $ip_address
+): void {
     $stmt = $db->prepare(
-        "DELETE FROM login_attempts WHERE username = ?"
+        "DELETE FROM login_attempts "
+        . "WHERE username = ? AND ip_address = ?"
     );
 
-    $stmt->execute([$username]);
+    $stmt->execute([
+        $username,
+        $ip_address
+    ]);
 }
 
 /**
@@ -109,10 +164,18 @@ function utc_database_time_to_timestamp(?string $value): ?int {
 /**
  * Başarısız şifre denemesini kaydeder ve güncel sayacı döndürür.
  */
-function register_failed_login(PDO $db, string $username): array {
+function register_failed_login(
+    PDO $db,
+    string $username,
+    string $ip_address
+): array {
     $now_timestamp = time();
     $now_database = gmdate('Y-m-d H:i:s');
-    $attempt = get_login_attempt($db, $username);
+    $attempt = get_login_attempt(
+        $db,
+        $username,
+        $ip_address
+    );
 
     $last_failed_timestamp = utc_database_time_to_timestamp(
         $attempt['last_failed_at'] ?? null
@@ -129,12 +192,25 @@ function register_failed_login(PDO $db, string $username): array {
         ? (string) ($attempt['first_failed_at'] ?? $now_database)
         : $now_database;
 
-    $locked_until = $failed_attempts >= MAX_LOGIN_FAILURES
-        ? gmdate(
+    $lock_level = (int) ($attempt['lock_level'] ?? 0);
+    $lock_seconds = 0;
+    $locked_until = null;
+
+    if ($failed_attempts >= MAX_LOGIN_FAILURES) {
+        $lock_level = min(
+            $lock_level + 1,
+            MAX_LOGIN_LOCK_LEVEL
+        );
+
+        $lock_seconds = LOGIN_LOCK_LEVEL_SECONDS[
+            $lock_level - 1
+        ] ?? LOGIN_LOCK_SECONDS;
+
+        $locked_until = gmdate(
             'Y-m-d H:i:s',
-            $now_timestamp + LOGIN_LOCK_SECONDS
-        )
-        : null;
+            $now_timestamp + $lock_seconds
+        );
+    }
 
     if ($attempt) {
         $stmt = $db->prepare("
@@ -144,8 +220,11 @@ function register_failed_login(PDO $db, string $username): array {
                 first_failed_at = ?,
                 last_failed_at = ?,
                 locked_until = ?,
+                lock_level = ?,
+                last_lock_seconds = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE username = ?
+              AND ip_address = ?
         ");
 
         $stmt->execute([
@@ -153,34 +232,45 @@ function register_failed_login(PDO $db, string $username): array {
             $first_failed_at,
             $now_database,
             $locked_until,
-            $username
+            $lock_level,
+            $lock_seconds,
+            $username,
+            $ip_address
         ]);
     } else {
         $stmt = $db->prepare("
             INSERT INTO login_attempts
             (
                 username,
+                ip_address,
                 failed_attempts,
                 first_failed_at,
                 last_failed_at,
                 locked_until,
+                lock_level,
+                last_lock_seconds,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ");
 
         $stmt->execute([
             $username,
+            $ip_address,
             $failed_attempts,
             $first_failed_at,
             $now_database,
-            $locked_until
+            $locked_until,
+            $lock_level,
+            $lock_seconds
         ]);
     }
 
     return [
         'failed_attempts' => $failed_attempts,
-        'locked_until' => $locked_until
+        'locked_until' => $locked_until,
+        'lock_level' => $lock_level,
+        'lock_seconds' => $lock_seconds
     ];
 }
 
@@ -206,11 +296,13 @@ if (empty($_SESSION["login_csrf_token"])) {
 
 $login_csrf_token = (string) $_SESSION["login_csrf_token"];
 $error = "";
+$lock_remaining_seconds = 0;
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     $username = trim((string) ($_POST["username"] ?? ""));
     $password = (string) ($_POST["password"] ?? "");
+    $client_ip = get_client_ip_address();
     $recaptcha = (string) ($_POST["g-recaptcha-response"] ?? "");
     $submitted_csrf = (string) ($_POST["csrf_token"] ?? "");
 
@@ -320,7 +412,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         } else {
 
-            $attempt = get_login_attempt($db, $username);
+            $attempt = get_login_attempt(
+                $db,
+                $username,
+                $client_ip
+            );
             $locked_until_timestamp = utc_database_time_to_timestamp(
                 $attempt["locked_until"] ?? null
             );
@@ -330,8 +426,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 && $locked_until_timestamp > time()
             ) {
 
-                $remaining_minutes = (int) ceil(
-                    ($locked_until_timestamp - time()) / 60
+                $lock_remaining_seconds = max(
+                    0,
+                    $locked_until_timestamp - time()
                 );
 
                 log_login_event(
@@ -342,15 +439,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 );
 
                 $error = "Çok fazla hatalı deneme yapıldı. "
-                    . $remaining_minutes
-                    . " dakika sonra tekrar deneyin.";
+                    . format_lock_duration($lock_remaining_seconds)
+                    . " sonra tekrar deneyin.";
 
             } else {
 
-                // Süresi dolmuş kilit varsa yeni deneme temiz bir sayaçla başlar.
-                if ($attempt && !empty($attempt["locked_until"])) {
-                    clear_login_attempt($db, $username);
-                }
+                // Süresi dolmuş kilitte lock_level korunur; yeni pencere
+                // başladığında başarısız deneme sayısı register_failed_login()
+                // içinde yeniden 1 olarak hesaplanır.
 
                 $stmt = $db->prepare("
                     SELECT
@@ -384,7 +480,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     // Rol tanımlı değilse yönlendirme yapmadan hata göster.
                     if (!isset($pages[$user["role"]])) {
 
-                        clear_login_attempt($db, $username);
+                        clear_login_attempt(
+                            $db,
+                            $username,
+                            $client_ip
+                        );
 
                         log_login_event(
                             $db,
@@ -398,7 +498,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     } else {
 
-                        clear_login_attempt($db, $username);
+                        clear_login_attempt(
+                            $db,
+                            $username,
+                            $client_ip
+                        );
 
                         // Oturum sabitleme saldırılarına karşı
                         // giriş sonrası oturum kimliğini yeniden oluştur.
@@ -424,7 +528,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     $failure = register_failed_login(
                         $db,
-                        $username
+                        $username,
+                        $client_ip
                     );
 
                     $log_user_id = $user
@@ -443,15 +548,32 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         >= MAX_LOGIN_FAILURES
                     ) {
 
+                        $lock_event_type = match (
+                            (int) ($failure["lock_level"] ?? 0)
+                        ) {
+                            1 => "login_locked_15m",
+                            2 => "login_locked_30m",
+                            3 => "login_locked_60m",
+                            default => "login_locked"
+                        };
+
                         log_login_event(
                             $db,
                             $log_user_id,
                             $username,
-                            "login_locked"
+                            $lock_event_type
+                        );
+
+                        $lock_remaining_seconds = max(
+                            0,
+                            utc_database_time_to_timestamp(
+                                $failure["locked_until"] ?? null
+                            ) - time()
                         );
 
                         $error = "3 hatalı deneme yapıldı. "
-                            . "15 dakika sonra tekrar deneyin.";
+                            . format_lock_duration($lock_remaining_seconds)
+                            . " sonra tekrar deneyin.";
 
                     } else {
 
@@ -493,18 +615,34 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         <?php if (!empty($error)): ?>
 
-            <div class="error">
+            <div
+                class="error"
+                role="alert"
+            >
                 <?= htmlspecialchars(
                     $error,
                     ENT_QUOTES,
                     "UTF-8"
                 ) ?>
+
+                <?php if ($lock_remaining_seconds > 0): ?>
+
+                    <div
+                        id="lockoutCountdown"
+                        class="lockout-countdown"
+                        data-remaining-seconds="<?= (int) $lock_remaining_seconds ?>"
+                        aria-live="polite"
+                    >
+                        Kalan süre hesaplanıyor...
+                    </div>
+
+                <?php endif; ?>
             </div>
 
         <?php endif; ?>
 
 
-        <form method="POST">
+        <form method="POST" id="loginForm">
 
             <input
                 type="hidden"
@@ -548,7 +686,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
 
 
-            <button type="submit" class="full-width">
+            <button
+                type="submit"
+                class="full-width"
+                id="loginSubmitButton"
+                <?= $lock_remaining_seconds > 0 ? "disabled" : "" ?>
+            >
                 Giriş Yap
             </button>
 
@@ -564,6 +707,60 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     async
     defer>
 </script>
+
+<?php if ($lock_remaining_seconds > 0): ?>
+<script>
+(function () {
+    const countdown = document.getElementById("lockoutCountdown");
+    const submitButton = document.getElementById("loginSubmitButton");
+
+    if (!countdown) {
+        return;
+    }
+
+    let remaining = Math.max(
+        0,
+        Number(countdown.dataset.remainingSeconds || 0)
+    );
+
+    function renderCountdown() {
+        const minutes = Math.floor(remaining / 60);
+        const seconds = remaining % 60;
+        const formattedSeconds = String(seconds).padStart(2, "0");
+
+        if (remaining > 0) {
+            countdown.textContent =
+                "Canlı kalan süre: "
+                + minutes
+                + ":"
+                + formattedSeconds;
+
+            if (submitButton) {
+                submitButton.disabled = true;
+            }
+        } else {
+            countdown.textContent =
+                "Kilit süresi doldu. Tekrar deneyebilirsiniz.";
+
+            if (submitButton) {
+                submitButton.disabled = false;
+            }
+        }
+    }
+
+    renderCountdown();
+
+    const timer = window.setInterval(function () {
+        remaining = Math.max(0, remaining - 1);
+        renderCountdown();
+
+        if (remaining === 0) {
+            window.clearInterval(timer);
+        }
+    }, 1000);
+})();
+</script>
+<?php endif; ?>
 
 </body>
 

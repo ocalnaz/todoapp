@@ -510,6 +510,7 @@ $stmt = $db->prepare("
         task_submissions.content,
         task_submissions.created_at,
         task_submissions.status,
+        task_submissions.version_no,
         task_submissions.file_name,
         task_submissions.file_path,
 
@@ -517,6 +518,7 @@ $stmt = $db->prepare("
         tasks.description,
         tasks.due_date,
         tasks.status AS task_status,
+        tasks.priority,
 
         users.full_name,
         users.username,
@@ -946,6 +948,24 @@ unset($submission);
                         <?= htmlspecialchars(
                             $submission["title"]
                         ) ?>
+
+                        <?php
+                        $priority_labels = [
+                            "low" => "Düşük",
+                            "normal" => "Normal",
+                            "high" => "Yüksek",
+                            "urgent" => "Acil"
+                        ];
+                        $submission_priority = $submission["priority"] ?? "normal";
+                        ?>
+
+                        <span class="priority-badge priority-<?= htmlspecialchars($submission_priority, ENT_QUOTES, "UTF-8") ?>">
+                            <?= htmlspecialchars($priority_labels[$submission_priority] ?? "Normal", ENT_QUOTES, "UTF-8") ?>
+                        </span>
+
+                        <span class="submission-version-badge">
+                            Sürüm v<?= max(1, (int) ($submission["version_no"] ?? 1)) ?>
+                        </span>
 
                     </h2>
 

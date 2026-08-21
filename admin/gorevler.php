@@ -194,6 +194,10 @@ if (
             (string) ($_POST["due_date"] ?? "")
         );
 
+        $priority = $_POST["priority"] ?? "normal";
+        $valid_priorities = ["low", "normal", "high", "urgent"];
+        $valid_priority = in_array($priority, $valid_priorities, true);
+
         $valid_due_date = $due_date === ""
             || (
                 preg_match('/^\\d{4}-\\d{2}-\\d{2}$/D', $due_date)
@@ -214,6 +218,7 @@ if (
             || $description === ""
             || $assigned_to === false
             || !$valid_due_date
+            || !$valid_priority
         ) {
 
             $error =
@@ -239,9 +244,10 @@ if (
                         assigned_to,
                         assigned_by,
                         due_date,
-                        status
+                        status,
+                        priority
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 ");
 
                 $stmt->execute([
@@ -250,7 +256,8 @@ if (
                     $assigned_to,
                     $_SESSION["user_id"],
                     $due_date,
-                    "bekliyor"
+                    "bekliyor",
+                    $priority
                 ]);
 
 
@@ -301,6 +308,9 @@ $filter_user =
 
 $filter_status =
     $_GET["filter_status"] ?? "";
+
+$filter_priority =
+    $_GET["filter_priority"] ?? "";
 
 $filter_date_from =
     $_GET["date_from"] ?? "";
@@ -367,6 +377,7 @@ $sql = "
         tasks.description,
         tasks.due_date,
         tasks.status,
+        tasks.priority,
         tasks.created_at,
 
         users.full_name,
@@ -432,6 +443,15 @@ if ($filter_status !== "") {
 
     $params[] =
         $filter_status;
+}
+
+if (in_array($filter_priority, ["low", "normal", "high", "urgent"], true)) {
+
+    $sql .= "
+        AND tasks.priority = ?
+    ";
+
+    $params[] = $filter_priority;
 }
 
 
@@ -989,6 +1009,50 @@ $tasks =
 
                 <label>
 
+                    ⚡ Öncelik
+
+                </label>
+
+
+                <select name="filter_priority">
+
+                    <option value="">
+                        Tüm Öncelikler
+                    </option>
+
+                    <option
+                        value="urgent"
+                        <?= $filter_priority === "urgent" ? "selected" : "" ?>
+                    >
+                        🔴 Acil
+                    </option>
+
+                    <option
+                        value="high"
+                        <?= $filter_priority === "high" ? "selected" : "" ?>
+                    >
+                        🟠 Yüksek
+                    </option>
+
+                    <option
+                        value="normal"
+                        <?= $filter_priority === "normal" ? "selected" : "" ?>
+                    >
+                        🟣 Normal
+                    </option>
+
+                    <option
+                        value="low"
+                        <?= $filter_priority === "low" ? "selected" : "" ?>
+                    >
+                        🟢 Düşük
+                    </option>
+
+                </select>
+
+
+                <label>
+
                     ⚡ Hızlı Tarih
 
                 </label>
@@ -1234,6 +1298,7 @@ $tasks =
                 $search !== ""
                 || $filter_user !== ""
                 || $filter_status !== ""
+                || $filter_priority !== ""
                 || $filter_date_from !== ""
                 || $filter_date_to !== ""
                 || $filter_deadline !== "";
@@ -1287,7 +1352,7 @@ $tasks =
             <?php else: ?>
 
 
-                <table>
+                <table id="adminTaskTable">
 
                     <tr>
 
@@ -1305,6 +1370,10 @@ $tasks =
 
                         <th>
                             Son Tarih
+                        </th>
+
+                        <th>
+                            Öncelik
                         </th>
 
                         <th>
@@ -1470,6 +1539,23 @@ $tasks =
                             </td>
 
 
+                            <!-- ÖNCELİK -->
+
+                            <td>
+                                <?php
+                                $priority_labels = [
+                                    "low" => "Düşük",
+                                    "normal" => "Normal",
+                                    "high" => "Yüksek",
+                                    "urgent" => "Acil"
+                                ];
+                                $task_priority = $task["priority"] ?? "normal";
+                                ?>
+                                <span class="priority-badge priority-<?= htmlspecialchars($task_priority, ENT_QUOTES, "UTF-8") ?>">
+                                    <?= htmlspecialchars($priority_labels[$task_priority] ?? "Normal", ENT_QUOTES, "UTF-8") ?>
+                                </span>
+                            </td>
+
                             <!-- DURUM -->
 
                             <td>
@@ -1567,6 +1653,12 @@ $tasks =
                     <?php endforeach; ?>
 
                 </table>
+
+                <div
+                    id="adminTaskPagination"
+                    class="pagination-controls"
+                    aria-label="Görev sayfaları"
+                ></div>
 
 
             <?php endif; ?>
@@ -1706,6 +1798,62 @@ function setQuickDate(value) {
 
 }
 
+</script>
+
+
+<script>
+(function () {
+    const table = document.getElementById("adminTaskTable");
+    const pagination = document.getElementById("adminTaskPagination");
+
+    if (!table || !pagination) {
+        return;
+    }
+
+    const rows = Array.from(
+        table.querySelectorAll("tr:not(:first-child)")
+    );
+    const perPage = 10;
+    const pageCount = Math.ceil(rows.length / perPage);
+
+    if (pageCount <= 1) {
+        return;
+    }
+
+    let currentPage = 1;
+
+    function renderPage(page) {
+        currentPage = Math.max(1, Math.min(page, pageCount));
+        const first = (currentPage - 1) * perPage;
+
+        rows.forEach(function (row, index) {
+            row.hidden = index < first || index >= first + perPage;
+        });
+
+        pagination.replaceChildren();
+
+        for (let number = 1; number <= pageCount; number++) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "pagination-button";
+            button.textContent = String(number);
+            button.setAttribute("aria-label", "Sayfa " + number);
+
+            if (number === currentPage) {
+                button.classList.add("active");
+                button.setAttribute("aria-current", "page");
+            }
+
+            button.addEventListener("click", function () {
+                renderPage(number);
+            });
+
+            pagination.appendChild(button);
+        }
+    }
+
+    renderPage(1);
+})();
 </script>
 
 

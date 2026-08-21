@@ -66,6 +66,21 @@ function login_event_label(string $event_type): array
             "class" => "expired"
         ],
 
+        "login_locked_15m" => [
+            "label" => "15 dakika kilitlendi",
+            "class" => "expired"
+        ],
+
+        "login_locked_30m" => [
+            "label" => "30 dakika kilitlendi",
+            "class" => "expired"
+        ],
+
+        "login_locked_60m" => [
+            "label" => "60 dakika kilitlendi",
+            "class" => "expired"
+        ],
+
         "login_blocked" => [
             "label" => "Kilitliyken deneme",
             "class" => "expired"
@@ -84,6 +99,16 @@ function login_event_label(string $event_type): array
         "recaptcha_failed" => [
             "label" => "reCAPTCHA başarısız",
             "class" => "revize"
+        ],
+
+        "recaptcha_config_missing" => [
+            "label" => "reCAPTCHA ayarı eksik",
+            "class" => "expired"
+        ],
+
+        "csrf_failed" => [
+            "label" => "CSRF doğrulaması başarısız",
+            "class" => "expired"
         ],
 
         "invalid_role" => [

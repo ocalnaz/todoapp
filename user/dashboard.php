@@ -1021,6 +1021,21 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     // GÖNDERİMİ KAYDET
                     // ====================================================
 
+                    // Aynı görev için kullanıcının gönderdiği sürüm numarasını artır.
+                    $version_stmt = $db->prepare(
+                        "SELECT COALESCE(MAX(version_no), 0) + 1
+                         FROM task_submissions
+                         WHERE task_id = ? AND user_id = ?"
+                    );
+                    $version_stmt->execute([
+                        $task_id,
+                        $user_id
+                    ]);
+                    $submission_version = max(
+                        1,
+                        (int) $version_stmt->fetchColumn()
+                    );
+
                     $submission_stmt =
                         $db->prepare("
                             INSERT INTO task_submissions
@@ -1032,10 +1047,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                 created_at,
                                 status,
                                 file_name,
-                                file_path
+                                file_path,
+                                version_no
                             )
                             VALUES
                             (
+                                ?,
                                 ?,
                                 ?,
                                 ?,
@@ -1057,7 +1074,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                         $utc_now,
                         "incelemede",
                         $submission_file_name,
-                        $submission_file_path
+                        $submission_file_path,
+                        $submission_version
 
                     ]);
 
@@ -1252,8 +1270,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                     }
 
+                    error_log(
+                        "User dashboard submission error: " . $e->getMessage()
+                    );
+
                     $error =
-                        $e->getMessage();
+                        "Günlük görev gönderilirken bir hata oluştu.";
 
                 } catch (PDOException $e) {
 
@@ -1390,6 +1412,7 @@ try {
                 tasks.assigned_by,
                 tasks.due_date,
                 tasks.status,
+                tasks.priority,
                 tasks.created_at,
                 assigned_admin.full_name AS assigned_by_name,
                 assigned_admin.username AS assigned_by_username
@@ -1464,6 +1487,7 @@ try {
                     submitted_at,
                     created_at,
                     status,
+                    version_no,
                     file_name,
                     file_path
                 FROM task_submissions
@@ -2722,6 +2746,21 @@ if (userProfileImageInput && userProfileUploadSubmit) {
 
             <div class="filter-group">
 
+                <label for="taskPriorityFilter">
+                    ⚡ Öncelik
+                </label>
+                <select id="taskPriorityFilter">
+                    <option value="all">Tüm Öncelikler</option>
+                    <option value="urgent">Acil</option>
+                    <option value="high">Yüksek</option>
+                    <option value="normal">Normal</option>
+                    <option value="low">Düşük</option>
+                </select>
+
+            </div>
+
+            <div class="filter-group">
+
                 <label for="taskDateFilter">
                     📅 Tarih
                 </label>
@@ -2763,6 +2802,8 @@ if (userProfileImageInput && userProfileUploadSubmit) {
         </span>
 
     </div>
+
+    <div class="pagination" id="userTaskPagination" aria-label="Görev sayfaları"></div>
 
 
     <!-- ========================================================
@@ -2906,11 +2947,19 @@ if (userProfileImageInput && userProfileUploadSubmit) {
                         "UTF-8"
                     ) ?>"
                     data-status="<?= $display_status_class ?>"
+                    data-priority="<?= htmlspecialchars($task["priority"] ?? "normal", ENT_QUOTES, "UTF-8") ?>"
                     data-date="<?= $task_timestamp ?>"
                 >
 
 
                     <div class="task-card-top">
+                        <?php
+                        $priority_labels = ["low" => "Düşük", "normal" => "Normal", "high" => "Yüksek", "urgent" => "Acil"];
+                        $task_priority = $task["priority"] ?? "normal";
+                        ?>
+                        <span class="priority-badge priority-<?= htmlspecialchars($task_priority, ENT_QUOTES, "UTF-8") ?>">
+                            <?= htmlspecialchars($priority_labels[$task_priority] ?? "Normal", ENT_QUOTES, "UTF-8") ?>
+                        </span>
 
                         <h2>
 
@@ -3204,6 +3253,11 @@ if (userProfileImageInput && userProfileUploadSubmit) {
                                                 ) ?>
 
                                             </strong>
+
+
+                                            <span class="submission-version-badge">
+                                                v<?= max(1, (int) ($submission["version_no"] ?? 1)) ?>
+                                            </span>
 
 
                                             <span class="submission-date">
@@ -4153,6 +4207,12 @@ const taskStatusFilter =
     );
 
 
+const taskPriorityFilter =
+    document.getElementById(
+        "taskPriorityFilter"
+    );
+
+
 const taskDateFilter =
     document.getElementById(
         "taskDateFilter"
@@ -4177,7 +4237,18 @@ const noTaskResult =
     );
 
 
-function filterTasks() {
+const userTaskPagination =
+    document.getElementById(
+        "userTaskPagination"
+    );
+
+let userTaskPage = 1;
+const userTaskPageSize = 6;
+
+
+function filterTasks(resetPage = false) {
+
+    if (resetPage) userTaskPage = 1;
 
     const searchValue =
         taskSearch.value
@@ -4192,6 +4263,9 @@ function filterTasks() {
     const dateValue =
         taskDateFilter.value;
 
+    const priorityValue =
+        taskPriorityFilter ? taskPriorityFilter.value : "all";
+
 
     const tasks =
         document.querySelectorAll(
@@ -4200,6 +4274,7 @@ function filterTasks() {
 
 
     let visibleCount = 0;
+    const matchingTasks = [];
 
 
     const now =
@@ -4276,6 +4351,9 @@ function filterTasks() {
             const status =
                 task.dataset.status || "";
 
+            const priority =
+                task.dataset.priority || "normal";
+
 
             const timestamp =
                 parseInt(
@@ -4292,6 +4370,10 @@ function filterTasks() {
             const matchesStatus =
                 statusValue === "all" ||
                 status === statusValue;
+
+            const matchesPriority =
+                priorityValue === "all" ||
+                priority === priorityValue;
 
 
             let matchesDate = true;
@@ -4353,6 +4435,7 @@ function filterTasks() {
             const visible =
                 matchesSearch &&
                 matchesStatus &&
+                matchesPriority &&
                 matchesDate;
 
 
@@ -4360,6 +4443,7 @@ function filterTasks() {
 
                 task.style.display =
                     "";
+                matchingTasks.push(task);
 
                 visibleCount++;
 
@@ -4373,6 +4457,27 @@ function filterTasks() {
         }
     );
 
+
+    const pageCount = Math.max(1, Math.ceil(matchingTasks.length / userTaskPageSize));
+    if (userTaskPage > pageCount) userTaskPage = pageCount;
+    const pageStart = (userTaskPage - 1) * userTaskPageSize;
+    matchingTasks.forEach(function (task, index) {
+        task.style.display = index >= pageStart && index < pageStart + userTaskPageSize ? "" : "none";
+    });
+    if (userTaskPagination) {
+        userTaskPagination.innerHTML = "";
+        if (pageCount > 1) {
+            for (let page = 1; page <= pageCount; page++) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "pagination-button" + (page === userTaskPage ? " is-active" : "");
+                button.textContent = String(page);
+                button.setAttribute("aria-label", "Sayfa " + page);
+                button.addEventListener("click", function () { userTaskPage = page; filterTasks(false); });
+                userTaskPagination.appendChild(button);
+            }
+        }
+    }
 
     taskResultText.textContent =
         visibleCount +
@@ -4398,7 +4503,7 @@ if (taskSearch) {
 
     taskSearch.addEventListener(
         "input",
-        filterTasks
+        function () { filterTasks(true); }
     );
 
 }
@@ -4408,7 +4513,7 @@ if (taskStatusFilter) {
 
     taskStatusFilter.addEventListener(
         "change",
-        filterTasks
+        function () { filterTasks(true); }
     );
 
 }
@@ -4418,9 +4523,14 @@ if (taskDateFilter) {
 
     taskDateFilter.addEventListener(
         "change",
-        filterTasks
+        function () { filterTasks(true); }
     );
 
+}
+
+
+if (taskPriorityFilter) {
+    taskPriorityFilter.addEventListener("change", function () { filterTasks(true); });
 }
 
 
@@ -4438,8 +4548,9 @@ if (clearTaskFilters) {
 
             taskDateFilter.value =
                 "all";
+            if (taskPriorityFilter) taskPriorityFilter.value = "all";
 
-            filterTasks();
+            filterTasks(true);
 
         }
     );
